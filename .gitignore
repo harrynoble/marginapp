@@ -18,3 +18,5 @@ local.properties
 
 # Local helper scripts with machine-specific paths
 build.ps1
+build-log.txt
+verify-log.txt
