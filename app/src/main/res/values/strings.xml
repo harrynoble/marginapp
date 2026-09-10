@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Margin</string>
+    <string name="notification_channel_schedule">Schedule</string>
+    <string name="notification_channel_schedule_desc">Reminders for what is starting next.</string>
+    <string name="notification_channel_focus">Focus session</string>
+    <string name="notification_channel_focus_desc">The running timer for your current activity.</string>
+    <string name="notification_channel_planning">Planning</string>
+    <string name="notification_channel_planning_desc">Daily plan updates and the evening check-in.</string>
+</resources>
