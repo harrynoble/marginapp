@@ -201,7 +201,7 @@ fun TodayScreen(
                         )
                     } else {
                         OpenNowCard(
-                            nextBlock = state.next,
+                            nextBlock = state.nextMeaningful,
                             use24Hour = state.use24Hour,
                             onPlan = { viewModel.replan() },
                             outsideWakingHours = state.outsideWakingHours,

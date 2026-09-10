@@ -52,6 +52,10 @@ data class TodayUiState(
 
     val next: ScheduleBlock? get() = upcoming.firstOrNull()
 
+    /** The next block worth naming. Free time is not an answer to "what is next". */
+    val nextMeaningful: ScheduleBlock?
+        get() = upcoming.firstOrNull { it.type != BlockType.FREE } ?: next
+
     /** True before the user is up, or after they should be in bed. */
     val outsideWakingHours: Boolean
         get() = nowMinute < wakeMinute || (sleepMinute > wakeMinute && nowMinute >= sleepMinute)

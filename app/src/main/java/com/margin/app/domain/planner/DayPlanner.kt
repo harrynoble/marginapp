@@ -468,6 +468,9 @@ class DayPlanner {
             .mapNotNull { (id, left) ->
                 val candidate = byId[id] ?: return@mapNotNull null
                 val done = candidate.minutes - left
+                // A handful of minutes shaved off something that mostly fitted is not a
+                // shortfall the user needs telling about.
+                if (done > 0 && left < MIN_FRAGMENT) return@mapNotNull null
                 diagnostics += Diagnostic.InsufficientTime(
                     candidateId = id,
                     title = candidate.title,
@@ -499,6 +502,10 @@ class DayPlanner {
         val slot = TimeRange(cursor, cursor + available)
         val options = remaining.entries.sortedBy { it.key }.mapNotNull { (id, left) ->
             val candidate = byId[id] ?: return@mapNotNull null
+            // A few minutes left over from an earlier interval is not worth a calendar entry.
+            // Dropping the remainder is honest; a five minute session is theatre.
+            if (left < MIN_FRAGMENT) return@mapNotNull null
+
             val floor = minOf(candidate.minSession, left)
             if (floor <= 0 || available < floor || workBudget < floor) return@mapNotNull null
 
@@ -605,5 +612,6 @@ class DayPlanner {
         const val MIN_BUFFER = 10
         const val MIN_BREAK = 5
         const val MIN_FREE_BLOCK = 15
+        const val MIN_FRAGMENT = 10
     }
 }

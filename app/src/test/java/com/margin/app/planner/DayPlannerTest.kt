@@ -393,6 +393,37 @@ class DayPlannerTest {
     }
 
     @Test
+    fun `a few leftover minutes are dropped rather than given their own block`() {
+        // The morning holds 40 minutes, then a hard event, then the evening. A 45 minute task
+        // must not leave a five minute stub stranded after the event.
+        val plan = planner.plan(
+            PlannerInput(
+                date = monday,
+                prefs = prefs(wake = minutes(8), leisureFloor = 0, decompression = 0),
+                commitments = listOf(
+                    Commitment(
+                        id = "event:1",
+                        title = "Out",
+                        range = TimeRange(minutes(8, 40), minutes(18)),
+                        type = BlockType.EVENT,
+                        category = Category.PERSONAL,
+                    ),
+                ),
+                work = listOf(
+                    work("task:1", 45, minSession = 30, maxSession = 45, deadlineDays = 0),
+                ),
+            ),
+        )
+
+        val sessions = plan.blocks.filter { it.type == BlockType.TASK }
+        assertTrue("expected the bulk of the work to be placed", sessions.isNotEmpty())
+        assertTrue(
+            "no session should be a stub, got ${sessions.map { it.duration }}",
+            sessions.all { it.duration >= 10 },
+        )
+    }
+
+    @Test
     fun `a task is never compressed below its minimum session`() {
         val plan = planner.plan(
             PlannerInput(
