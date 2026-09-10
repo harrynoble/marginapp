@@ -55,7 +55,10 @@ expressive moment is the progress ring on the focus screen, and it moves once a 
 
 ## Components
 
-`ui/components` holds the shared vocabulary: `SectionHeader`, `MarginCard`,
-`TimelineRow`, `NowCard`, `CategoryDot`, `StatRow`, `EmptyState`, `ErrorState`,
-`PillButton`, `DurationPicker`, `TimeField`, `SheetHeader`. Every screen is assembled
-from these, which is what keeps spacing and hierarchy consistent.
+`ui/components` holds the shared vocabulary: `SectionHeader`, `MarginCard`, `BlockRow`,
+`CategoryDot`, `AccentRail`, `MetaChip`, `StatRow`, `ProportionBar`, `EmptyState`,
+`ErrorState`, `LabeledField`, `MarginTextField`, `TimeField`, `DurationPicker`,
+`CategoryPicker`, `PriorityPicker`, `DifficultyPicker`, `StepperRow`, `SheetGrabber`,
+`SheetAction` and `BlockActionsSheet`. `NowCard` lives with the Today screen because it is
+the only place display type is used. Every screen is assembled from these, which is what
+keeps spacing and hierarchy consistent without a spec to police.

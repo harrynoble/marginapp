@@ -15,13 +15,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.DirectionsWalk
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.Coffee
-import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.Event
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Restaurant
 import androidx.compose.material.icons.outlined.School
@@ -51,11 +51,11 @@ import com.margin.app.ui.theme.railFor
 fun iconFor(type: BlockType): ImageVector = when (type) {
     BlockType.CLASS -> Icons.Outlined.School
     BlockType.TASK -> Icons.Outlined.TaskAlt
-    BlockType.REVIEW -> Icons.Outlined.MenuBook
+    BlockType.REVIEW -> Icons.AutoMirrored.Outlined.MenuBook
     BlockType.BUILD -> Icons.Outlined.Build
     BlockType.BREAK -> Icons.Outlined.Coffee
     BlockType.MEAL -> Icons.Outlined.Restaurant
-    BlockType.COMMUTE -> Icons.Outlined.DirectionsWalk
+    BlockType.COMMUTE -> Icons.AutoMirrored.Outlined.DirectionsWalk
     BlockType.DECOMPRESS -> Icons.Outlined.SelfImprovement
     BlockType.LEISURE -> Icons.Outlined.Weekend
     BlockType.EVENT -> Icons.Outlined.Event

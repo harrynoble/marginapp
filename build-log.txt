@@ -37,6 +37,9 @@ Daemon will be stopped at the end of the build
 > Task :app:validateSigningDebug UP-TO-DATE
 > Task :app:writeDebugAppMetadata UP-TO-DATE
 > Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :app:preDebugAndroidTestBuild SKIPPED
+> Task :app:generateDebugAndroidTestResValues FROM-CACHE
+> Task :app:extractProguardFiles
 > Task :app:kspDebugKotlin
 > Task :app:compileDebugKotlin
 w: file:///C:/Users/noble/Documents/app/app/src/main/java/com/margin/app/ui/components/BlockRow.kt:54:40 'val Icons.Outlined.MenuBook: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Outlined.MenuBook.
@@ -50,14 +53,7 @@ w: file:///C:/Users/noble/Documents/app/app/src/main/java/com/margin/app/ui/comp
 > Task :app:mergeDebugGlobalSynthetics UP-TO-DATE
 > Task :app:mergeDebugJavaResource UP-TO-DATE
 > Task :app:mergeProjectDexDebug
-> Task :app:packageDebug
-> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
-> Task :app:assembleDebug
 > Task :app:kspDebugUnitTestKotlin
-> Task :app:compileDebugUnitTestKotlin
-> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
-> Task :app:processDebugUnitTestJavaRes UP-TO-DATE
-> Task :app:testDebugUnitTest
-
-BUILD SUCCESSFUL in 3m 21s
-45 actionable tasks: 10 executed, 35 up-to-date
+> Task :app:generateDebugAndroidTestLintModel
+> Task :app:generateDebugLintReportModel
+> Task :app:generateDebugUnitTestLintModel

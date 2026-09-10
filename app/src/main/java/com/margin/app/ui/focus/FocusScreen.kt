@@ -1,5 +1,8 @@
 package com.margin.app.ui.focus
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -33,6 +36,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -59,6 +63,7 @@ fun FocusScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     LaunchedEffect(state.finished) {
         if (state.finished) onClose()
@@ -208,7 +213,10 @@ fun FocusScreen(
                     SectionHeader("Resources")
                     Spacer(Modifier.height(Space.s))
                     state.links.forEach { link ->
-                        TextButton(onClick = { }) { Text(link.label) }
+                        TextButton(
+                            onClick = { openLink(context, link.url) },
+                            enabled = link.url.isNotBlank(),
+                        ) { Text(link.label) }
                     }
                 }
             }
@@ -280,5 +288,24 @@ private fun ProgressRing(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * Opens a resource in whatever app handles it. A reference that is not a URL is left alone
+ * rather than launching something surprising.
+ */
+private fun openLink(context: Context, url: String) {
+    val target = url.trim()
+    if (target.isBlank()) return
+    val uri = when {
+        target.startsWith("http://") || target.startsWith("https://") -> Uri.parse(target)
+        target.contains(".") && !target.contains(" ") -> Uri.parse("https://" + target)
+        else -> return
+    }
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 }

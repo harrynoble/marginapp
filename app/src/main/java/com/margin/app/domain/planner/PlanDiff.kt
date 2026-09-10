@@ -43,8 +43,8 @@ data class PlanDiff(val changes: List<PlanChange>) {
                 )
             }
 
-            val before = previous.associateBy { identity(it) }
-            val after = next.associateBy { identity(it) }
+            val before = indexed(previous)
+            val after = indexed(next)
             val changes = mutableListOf<PlanChange>()
 
             for ((key, old) in before) {
@@ -72,15 +72,32 @@ data class PlanDiff(val changes: List<PlanChange>) {
         }
 
         /**
-         * Two blocks are the same thing if they refer to the same task, event or class.
-         * Generic blocks fall back to type plus title so a break is not confused with leisure.
+         * Keys every block so the two plans can be matched up. The start time is deliberately
+         * not part of the key: a block that moved has to be recognisable as the same block,
+         * otherwise every move reads to the user as a deletion plus an unrelated addition.
+         *
+         * Repeats of the same thing on one day (two build sessions, three breaks) are told
+         * apart by their position in time order, which keeps the match stable.
          */
+        private fun indexed(blocks: List<PlacedBlock>): Map<String, PlacedBlock> {
+            val seen = mutableMapOf<String, Int>()
+            val out = LinkedHashMap<String, PlacedBlock>()
+            for (block in blocks.sortedBy { it.start }) {
+                val base = identity(block)
+                val occurrence = seen.getOrDefault(base, 0)
+                seen[base] = occurrence + 1
+                out["$base#$occurrence"] = block
+            }
+            return out
+        }
+
+        /** Two blocks are the same thing if they refer to the same task, event or class. */
         private fun identity(block: PlacedBlock): String = when {
             block.taskId != null -> "task:${block.taskId}"
             block.eventId != null -> "event:${block.eventId}"
             block.timetableEntryId != null -> "class:${block.timetableEntryId}"
             block.routineId != null -> "routine:${block.routineId}"
-            else -> "${block.type.key}:${block.title}:${block.start}"
+            else -> "${block.type.key}:${block.title}"
         }
     }
 }
