@@ -502,6 +502,9 @@ class DayPlanner {
             val floor = minOf(candidate.minSession, left)
             if (floor <= 0 || available < floor || workBudget < floor) return@mapNotNull null
 
+            // Some work cannot happen yet, whatever the day looks like.
+            candidate.earliestStart?.let { if (cursor < it) return@mapNotNull null }
+
             // A deadline falling today means the work has to land before it.
             val cap = candidate.deadlineMinute?.let { it - cursor } ?: Int.MAX_VALUE
             if (cap < floor) return@mapNotNull null

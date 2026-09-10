@@ -47,9 +47,12 @@ import com.margin.app.ui.components.MarginTextField
 import com.margin.app.ui.components.PriorityPicker
 import com.margin.app.ui.components.SheetGrabber
 import com.margin.app.ui.theme.Space
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.TextStyle
+import java.util.Locale
 
 /**
  * One sheet for creating and editing. Duration, deadline and difficulty are the fields the
@@ -80,6 +83,7 @@ fun TaskEditorSheet(
     var projectId by remember { mutableStateOf(task?.projectId) }
     var splittable by remember { mutableStateOf(task?.splittable ?: true) }
     var showDatePicker by remember { mutableStateOf(false) }
+    var recurrence by remember { mutableIntStateOf(task?.recurrenceMask ?: 0) }
     var linkLabel by remember { mutableStateOf("") }
     var linkUrl by remember { mutableStateOf("") }
 
@@ -208,6 +212,45 @@ fun TaskEditorSheet(
             }
 
             Spacer(Modifier.height(Space.l))
+            LabeledField("Repeat") {
+                Column {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        DayOfWeek.entries.forEach { day ->
+                            val bit = 1 shl (day.value - 1)
+                            val on = recurrence and bit != 0
+                            FilterChip(
+                                selected = on,
+                                onClick = {
+                                    recurrence = if (on) recurrence and bit.inv() else recurrence or bit
+                                },
+                                label = {
+                                    Text(
+                                        day.getDisplayName(TextStyle.SHORT, Locale.getDefault())
+                                            .take(3),
+                                    )
+                                },
+                                shape = MaterialTheme.shapes.small,
+                                colors = FilterChipDefaults.filterChipColors(
+                                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                            )
+                        }
+                    }
+                    if (recurrence != 0) {
+                        Spacer(Modifier.height(Space.s))
+                        Text(
+                            text = "This comes back on the days you picked. A deadline does not " +
+                                "apply to repeating work.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(Space.l))
             LabeledField("Sessions") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                     FilterChip(
@@ -312,7 +355,8 @@ fun TaskEditorSheet(
                                 estimatedMinutes = minutes,
                                 priority = priority,
                                 difficulty = difficulty,
-                                deadlineDate = deadline,
+                                deadlineDate = if (recurrence == 0) deadline else null,
+                                recurrenceMask = recurrence,
                                 projectId = projectId,
                                 splittable = splittable,
                                 minSessionMinutes = if (splittable) {

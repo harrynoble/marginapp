@@ -57,6 +57,11 @@ data class WorkCandidate(
     /** When the deadline falls today, the last minute at which this work is still useful. */
     val deadlineMinute: Int? = null,
     val preferredWindow: TimeRange? = null,
+    /**
+     * A hard floor on when this may start. Revision of a subject cannot happen before the
+     * class that is being revised, however much room the morning has.
+     */
+    val earliestStart: Int? = null,
     val splittable: Boolean = true,
     /** Extra weight the caller wants applied, for example a task pinned to today. */
     val importance: Int = 0,

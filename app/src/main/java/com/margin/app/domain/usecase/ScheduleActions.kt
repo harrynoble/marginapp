@@ -81,10 +81,17 @@ class ScheduleActions(
         scheduleRepository.recordCompletion(finished, worked)
 
         block.taskId?.let { taskId ->
-            taskRepository.addProgress(taskId, worked)
             taskRepository.recordSession(taskId, block.date, block.duration, worked)
             val task = taskRepository.task(taskId)
-            if (task != null && task.remainingMinutes <= 0) taskRepository.markDone(taskId)
+            // A recurring task is never finished by one occurrence, so its progress is not
+            // banked against a total that would eventually close it.
+            if (task != null && !task.isRecurring) {
+                taskRepository.addProgress(taskId, worked)
+                val updated = taskRepository.task(taskId)
+                if (updated != null && updated.remainingMinutes <= 0) {
+                    taskRepository.markDone(taskId)
+                }
+            }
         }
 
         return if (replan) planningService.replan(block.date, now) else null

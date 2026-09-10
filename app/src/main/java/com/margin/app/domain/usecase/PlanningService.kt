@@ -287,10 +287,10 @@ class PlanningService(
         if (teaching.isEmpty()) return emptyList()
 
         val subjects = timetableRepository.subjects().associateBy { it.code }
-        val perSubject = teaching
-            .filter { it.subjectCode != null }
-            .groupBy { it.subjectCode!! }
-            .mapValues { entry -> entry.value.sumOf { it.range.duration } }
+        val bySubject = teaching.filter { it.subjectCode != null }.groupBy { it.subjectCode!! }
+        val perSubject = bySubject.mapValues { entry -> entry.value.sumOf { it.range.duration } }
+        // Revision of a subject cannot be scheduled before the class it revises.
+        val taughtBy = bySubject.mapValues { entry -> entry.value.maxOf { it.range.end } }
 
         val raw = perSubject.map { (code, taughtMinutes) ->
             val subject = subjects[code]
@@ -321,6 +321,7 @@ class PlanningService(
                 subjectCode = code,
                 minSession = prefs.minReviewSession.coerceAtMost(minutes),
                 maxSession = minutes,
+                earliestStart = taughtBy[code],
                 priority = Priority.NORMAL,
                 difficulty = Difficulty.MODERATE,
                 energy = EnergyLevel.MEDIUM,

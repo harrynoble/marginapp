@@ -471,6 +471,59 @@ class DayPlannerTest {
         assertTrue("the hard task should start inside the peak window", hard.start >= minutes(16))
     }
 
+    @Test
+    fun `revision cannot be scheduled before the class it revises`() {
+        // The morning before college is free, and without a floor the engine would happily
+        // put the review of a 12:00 class into it.
+        val review = work(
+            "review:ToC",
+            30,
+            title = "ToC review",
+            minSession = 20,
+            maxSession = 30,
+            type = BlockType.REVIEW,
+        ).copy(earliestStart = minutes(12, 50))
+
+        val plan = planner.plan(
+            PlannerInput(
+                date = monday,
+                prefs = prefs(leisureFloor = 0),
+                commitments = collegeMonday(),
+                work = listOf(review),
+            ),
+        )
+
+        val placed = plan.blocks.filter { it.type == BlockType.REVIEW }
+        assertTrue("the review should still be scheduled", placed.isNotEmpty())
+        assertTrue(
+            "review placed at ${placed.first().start}, before the class ended",
+            placed.all { it.start >= minutes(12, 50) },
+        )
+    }
+
+    @Test
+    fun `an earliest start does not stop other work using the morning`() {
+        val plan = planner.plan(
+            PlannerInput(
+                date = monday,
+                prefs = prefs(leisureFloor = 0),
+                commitments = collegeMonday(),
+                work = listOf(
+                    work("review:ToC", 30, minSession = 20, maxSession = 30, type = BlockType.REVIEW)
+                        .copy(earliestStart = minutes(12, 50)),
+                    work("task:free", 45, minSession = 30, maxSession = 45, deadlineDays = 0),
+                ),
+            ),
+        )
+
+        val morning = plan.blocks.filter { it.type.isWork && it.start < minutes(8) }
+        assertTrue("the free morning should still be usable", morning.isNotEmpty())
+        assertTrue(
+            "only the unconstrained task may use it",
+            morning.all { it.type != BlockType.REVIEW },
+        )
+    }
+
     // ---- day boundaries -----------------------------------------------------------------
 
     @Test

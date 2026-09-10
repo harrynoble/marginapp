@@ -204,6 +204,8 @@ fun TodayScreen(
                             nextBlock = state.next,
                             use24Hour = state.use24Hour,
                             onPlan = { viewModel.replan() },
+                            outsideWakingHours = state.outsideWakingHours,
+                            wakeMinute = state.wakeMinute,
                         )
                     }
                 }

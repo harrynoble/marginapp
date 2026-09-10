@@ -3,6 +3,7 @@ package com.margin.app.ui.today
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -61,7 +62,7 @@ fun NowCard(
         label = "nowProgress",
     )
 
-    MarginCard(modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.xl)) {
+    MarginCard(modifier = modifier, contentPadding = PaddingValues(Space.xl)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionHeader(
                 text = if (running) "In progress" else "Now",
@@ -126,7 +127,7 @@ fun NowCard(
                     onClick = if (running) onComplete else onStart,
                     modifier = Modifier.weight(1f),
                     shape = MaterialTheme.shapes.small,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    contentPadding = PaddingValues(
                         horizontal = Space.l,
                         vertical = Space.m,
                     ),
@@ -182,22 +183,33 @@ fun OpenNowCard(
     use24Hour: Boolean,
     onPlan: () -> Unit,
     modifier: Modifier = Modifier,
+    outsideWakingHours: Boolean = false,
+    wakeMinute: Int = 0,
 ) {
-    MarginCard(modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.xl)) {
-        SectionHeader(text = "Now")
+    val headline = when {
+        outsideWakingHours -> "Day starts at " + MarginTime.formatTime(wakeMinute, use24Hour)
+        nextBlock != null -> "Open until " + MarginTime.formatTime(nextBlock.start, use24Hour)
+        else -> "Open"
+    }
+    val body = when {
+        outsideWakingHours && nextBlock != null ->
+            "You are outside your waking hours. First up is " + nextBlock.title + "."
+        outsideWakingHours -> "You are outside your waking hours. Nothing is planned yet."
+        nextBlock != null -> "Nothing is scheduled right now. Next is " + nextBlock.title + "."
+        else -> "Nothing scheduled for the rest of the day."
+    }
+
+    MarginCard(modifier = modifier, contentPadding = PaddingValues(Space.xl)) {
+        SectionHeader(text = if (outsideWakingHours) "Ahead" else "Now")
         Spacer(Modifier.height(Space.m))
         Text(
-            text = if (nextBlock != null) "Open until " + MarginTime.formatTime(nextBlock.start, use24Hour) else "Open",
+            text = headline,
             style = MaterialTheme.typography.displaySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(Space.s))
         Text(
-            text = if (nextBlock != null) {
-                "Nothing is scheduled right now. Next is " + nextBlock.title + "."
-            } else {
-                "Nothing scheduled for the rest of the day."
-            },
+            text = body,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

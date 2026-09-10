@@ -57,3 +57,27 @@ w: file:///C:/Users/noble/Documents/app/app/src/main/java/com/margin/app/ui/comp
 > Task :app:generateDebugAndroidTestLintModel
 > Task :app:generateDebugLintReportModel
 > Task :app:generateDebugUnitTestLintModel
+> Task :app:compileDebugUnitTestKotlin
+> Task :app:packageDebug
+> Task :app:lintAnalyzeDebug
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugUnitTestJavaRes UP-TO-DATE
+
+> Task :app:testDebugUnitTest
+
+PlanDiffTest > a block with no task identity is still recognised across a move FAILED
+    java.lang.IllegalArgumentException at PlanDiffTest.kt:52
+
+PlanDiffTest > repeats of the same thing are matched in time order FAILED
+    java.lang.AssertionError at PlanDiffTest.kt:67
+gradlew.bat : 
+At line:1 char:492
++ ... droid-sdk"; & .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+76 tests completed, 2 failed
+
+> Task :app:testDebugUnitTest FAILED
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE

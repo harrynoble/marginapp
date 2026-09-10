@@ -33,6 +33,8 @@ data class TodayUiState(
     val date: LocalDate = LocalDate.now(),
     val nowMinute: Int = 0,
     val use24Hour: Boolean = false,
+    val wakeMinute: Int = 0,
+    val sleepMinute: Int = 24 * 60,
     val energyMode: EnergyMode = EnergyMode.NORMAL,
     val current: ScheduleBlock? = null,
     val upcoming: List<ScheduleBlock> = emptyList(),
@@ -49,6 +51,10 @@ data class TodayUiState(
         else (completedWorkMinutes.toFloat() / plannedWorkMinutes).coerceIn(0f, 1f)
 
     val next: ScheduleBlock? get() = upcoming.firstOrNull()
+
+    /** True before the user is up, or after they should be in bed. */
+    val outsideWakingHours: Boolean
+        get() = nowMinute < wakeMinute || (sleepMinute > wakeMinute && nowMinute >= sleepMinute)
 }
 
 /** A short, human sentence describing what a replan did. Shown once, then dismissed. */
@@ -96,6 +102,8 @@ class TodayViewModel(
                     date = date,
                     nowMinute = nowMinute,
                     use24Hour = prefs.use24HourTime,
+                    wakeMinute = prefs.wakeMinute,
+                    sleepMinute = prefs.sleepMinute,
                     energyMode = prefs.energyModeFor(date),
                     blocks = blocks,
                     headline = plan?.headline,
@@ -124,6 +132,8 @@ class TodayViewModel(
         date: LocalDate,
         nowMinute: Int,
         use24Hour: Boolean,
+        wakeMinute: Int,
+        sleepMinute: Int,
         energyMode: EnergyMode,
         blocks: List<ScheduleBlock>,
         headline: String?,
@@ -162,6 +172,8 @@ class TodayViewModel(
             date = date,
             nowMinute = nowMinute,
             use24Hour = use24Hour,
+            wakeMinute = wakeMinute,
+            sleepMinute = sleepMinute,
             energyMode = energyMode,
             current = current,
             upcoming = upcoming,
