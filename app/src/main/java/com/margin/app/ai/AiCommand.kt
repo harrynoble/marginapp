@@ -1,0 +1,141 @@
+package com.margin.app.ai
+
+import com.margin.app.domain.model.CalendarEvent
+import com.margin.app.domain.model.Category
+import com.margin.app.domain.model.Difficulty
+import com.margin.app.domain.model.EnergyLevel
+import com.margin.app.domain.model.Priority
+import com.margin.app.domain.model.SkipResolution
+import com.margin.app.domain.model.Task
+import com.margin.app.domain.planner.EnergyMode
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.time.LocalDate
+
+/**
+ * The wire shape. Deliberately one flat, fully optional record rather than a polymorphic
+ * hierarchy: a model that omits a field or invents one should produce a validation error,
+ * not a deserialisation crash.
+ */
+@Serializable
+data class AiResponseDto(
+    val reply: String = "",
+    val commands: List<AiCommandDto> = emptyList(),
+)
+
+@Serializable
+data class AiCommandDto(
+    val action: String = "",
+    val title: String? = null,
+    val notes: String? = null,
+    val category: String? = null,
+    val subject: String? = null,
+    val minutes: Int? = null,
+    val priority: String? = null,
+    val difficulty: String? = null,
+    val energy: String? = null,
+    val date: String? = null,
+    val deadline: String? = null,
+    val start: String? = null,
+    val end: String? = null,
+    @SerialName("task_id") val taskId: Long? = null,
+    @SerialName("block_id") val blockId: Long? = null,
+    val mode: String? = null,
+    val resolution: String? = null,
+    val reason: String? = null,
+    val splittable: Boolean? = null,
+)
+
+/** The only vocabulary the assistant is allowed to speak in. */
+object AiActions {
+    const val CREATE_TASK = "create_task"
+    const val CREATE_EVENT = "create_event"
+    const val UPDATE_TASK = "update_task"
+    const val COMPLETE_TASK = "complete_task"
+    const val DELETE_TASK = "delete_task"
+    const val MOVE_BLOCK = "move_block"
+    const val SKIP_BLOCK = "skip_block"
+    const val TAKE_BREAK = "take_break"
+    const val SET_ENERGY = "set_energy"
+    const val SET_LEISURE = "set_leisure_floor"
+    const val SET_BUILD = "set_build_target"
+    const val REPLAN = "replan"
+    const val NONE = "none"
+
+    val all = setOf(
+        CREATE_TASK, CREATE_EVENT, UPDATE_TASK, COMPLETE_TASK, DELETE_TASK,
+        MOVE_BLOCK, SKIP_BLOCK, TAKE_BREAK, SET_ENERGY, SET_LEISURE, SET_BUILD,
+        REPLAN, NONE,
+    )
+}
+
+/**
+ * A command that has passed validation. Nothing else can reach the database, which is what
+ * keeps arbitrary model output from becoming application state.
+ */
+sealed interface ValidatedCommand {
+    /** A short sentence describing what happened, shown to the user after it is applied. */
+    val summary: String
+
+    data class CreateTask(val task: Task, override val summary: String) : ValidatedCommand
+
+    data class CreateEvent(val event: CalendarEvent, override val summary: String) : ValidatedCommand
+
+    data class UpdateTask(
+        val taskId: Long,
+        val title: String? = null,
+        val minutes: Int? = null,
+        val deadline: LocalDate? = null,
+        val priority: Priority? = null,
+        val difficulty: Difficulty? = null,
+        val energy: EnergyLevel? = null,
+        val category: Category? = null,
+        val notes: String? = null,
+        val splittable: Boolean? = null,
+        override val summary: String,
+    ) : ValidatedCommand
+
+    data class CompleteTask(val taskId: Long, override val summary: String) : ValidatedCommand
+
+    data class DeleteTask(val taskId: Long, override val summary: String) : ValidatedCommand
+
+    data class MoveBlock(
+        val blockId: Long,
+        val date: LocalDate,
+        val startMinute: Int,
+        override val summary: String,
+    ) : ValidatedCommand
+
+    data class SkipBlock(
+        val blockId: Long,
+        val resolution: SkipResolution,
+        val reason: String?,
+        override val summary: String,
+    ) : ValidatedCommand
+
+    data class TakeBreak(val minutes: Int, override val summary: String) : ValidatedCommand
+
+    data class SetEnergy(
+        val mode: EnergyMode,
+        val date: LocalDate,
+        override val summary: String,
+    ) : ValidatedCommand
+
+    data class SetLeisureFloor(val minutes: Int, override val summary: String) : ValidatedCommand
+
+    data class SetBuildTarget(
+        val minutes: Int,
+        val weekend: Boolean,
+        override val summary: String,
+    ) : ValidatedCommand
+
+    data class Replan(val date: LocalDate, override val summary: String) : ValidatedCommand
+}
+
+/** Why a command was refused. The user sees this rather than a silent no-op. */
+data class CommandRejection(val action: String, val reason: String)
+
+data class ValidationResult(
+    val commands: List<ValidatedCommand> = emptyList(),
+    val rejections: List<CommandRejection> = emptyList(),
+)

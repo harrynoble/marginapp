@@ -15,3 +15,6 @@ local.properties
 !debug.keystore
 /keystore.properties
 .kotlin/
+
+# Local helper scripts with machine-specific paths
+build.ps1
