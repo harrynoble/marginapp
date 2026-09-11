@@ -56,6 +56,8 @@ class AlarmScheduler(
         val blocks = scheduleRepository.blocksFor(date)
             .filter { it.status == BlockStatus.PLANNED }
             .filter { it.type != BlockType.SLEEP && it.type != BlockType.FREE }
+            // The person knows their timetable; announcing every period would be noise.
+            .filter { it.type != BlockType.CLASS && it.timetableEntryId == null }
             .filter { it.start - leadMinutes > afterMinute }
             .sortedBy { it.start }
         return blocks.firstOrNull()?.let { Target(it, date) }

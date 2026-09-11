@@ -1,41 +1,40 @@
 package com.margin.app.ui.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarViewWeek
-import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Today
-import androidx.compose.material.icons.filled.ViewAgenda
-import androidx.compose.material.icons.outlined.CalendarViewWeek
-import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material.icons.outlined.Today
-import androidx.compose.material.icons.outlined.ViewAgenda
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material.icons.rounded.Today
+import com.margin.app.ui.glass.GlassTab
 
 object Routes {
     const val TODAY = "today"
     const val PLAN = "plan"
     const val TASKS = "tasks"
-    const val TIMETABLE = "timetable"
     const val INSIGHTS = "insights"
     const val SETTINGS = "settings"
-    const val ONBOARDING = "onboarding"
+    const val TIMETABLE = "timetable"
     const val FOCUS = "focus/{blockId}"
-    const val TASK_DETAIL = "task/{taskId}"
 
     fun focus(blockId: Long) = "focus/$blockId"
-    fun taskDetail(taskId: Long) = "task/$taskId"
+
+    /** Tabs live in the floating tab bar; everything else is pushed on top of them. */
+    val tabs = listOf(TODAY, PLAN, TASKS, INSIGHTS)
+
+    fun isTab(route: String?): Boolean = route == null || route in tabs
 }
 
-enum class TopLevelDestination(
-    val route: String,
-    val label: String,
-    val selectedIcon: ImageVector,
-    val icon: ImageVector,
-) {
-    Today(Routes.TODAY, "Today", Icons.Filled.Today, Icons.Outlined.Today),
-    Plan(Routes.PLAN, "Plan", Icons.Filled.ViewAgenda, Icons.Outlined.ViewAgenda),
-    Tasks(Routes.TASKS, "Tasks", Icons.Outlined.Checklist, Icons.Outlined.Checklist),
-    Week(Routes.TIMETABLE, "Week", Icons.Filled.CalendarViewWeek, Icons.Outlined.CalendarViewWeek),
-    Insights(Routes.INSIGHTS, "Insights", Icons.Filled.Insights, Icons.Outlined.Insights),
-}
+/**
+ * Four tabs. The timetable is no longer one of them: it is set up once, lives under Settings,
+ * and otherwise stays out of the way, folded into a single "College" line on the timeline.
+ */
+val TopLevelTabs = listOf(
+    GlassTab("Today", Icons.Outlined.Today, Icons.Rounded.Today),
+    GlassTab("Plan", Icons.Outlined.CalendarMonth, Icons.Rounded.CalendarMonth),
+    GlassTab("Tasks", Icons.Outlined.TaskAlt, Icons.Rounded.TaskAlt),
+    GlassTab("Insights", Icons.Outlined.BarChart, Icons.Rounded.BarChart),
+)

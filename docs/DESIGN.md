@@ -2,63 +2,105 @@
 
 ## Intent
 
-Calm, mature, quiet. The app is used every day, often several times an hour, so it is
-built to be read at a glance and then put down. Nothing decorative. No gradients, no
-neon, no glass, no mascots, no motivational copy. Emoji appear only if the user types one.
+Margin follows Apple's current design language (iOS 26, "Liquid Glass") as closely as an
+Android app honestly can. The rules that matter most:
+
+- **Glass is for navigation, never for content.** The floating tab bar, the add button beside
+  it and the round toolbar buttons are glass. Cards, lists and sheets are solid surfaces.
+- **No glass on glass.** A glass control only ever sits over content.
+- **Tint means emphasis.** Only the add button is tinted glass; everything else is clear.
+- **Content first.** Bold, left-aligned large titles; inset grouped lists; one hero card on
+  Today and nothing else competing with it.
+- **Out of the way.** The timetable is set up once and then folded into a single "College"
+  line. Individual classes are never listed on Today or Plan and never announced.
+
+## Liquid Glass
+
+`ui/glass` renders glass without a library (the toolchain predates Haze 1.7 / 2.x):
+
+1. `Modifier.glassSource` records the content under the chrome into a `GraphicsLayer`.
+2. Each `GlassSurface` redraws that recording, offset to its own position, through a
+   `RenderEffect` chain: Gaussian blur → saturation lift (vibrancy) → an AGSL runtime shader
+   (`GlassShader`) that refracts the edge band along a rounded-rect SDF with a little
+   chromatic dispersion.
+3. On top: tint, a specular sheen across the upper half, a lit gradient rim and a hairline.
+
+| Android | Result |
+| --- | --- |
+| 13+ (API 33) | Blur, vibrancy and edge refraction |
+| 12 (API 31–32) | Blur and vibrancy |
+| Below 12 | Near-opaque material, as iOS shows with Reduce Transparency |
+
+Variants in `GlassDefaults`: `regular()` for bars, `prominent(color)` for the one primary
+action, `clear()` over the vivid focus screen. Where content meets the status bar, a
+progressive blur (`TopScrollEdge`) replaces an opaque navigation bar.
 
 ## Colour
 
-A near-neutral, slightly warm paper ground with a single deep evergreen accent. Category
-colours are desaturated and used at small sizes, a 3dp rail on a block or a dot in a list,
-never as large fills that would turn the timeline into a rainbow.
+Apple's semantic system colours (`ui/theme/Color.kt`): grouped background `#F2F2F7` /
+`#000000`, surfaces `#FFFFFF` / `#1C1C1E`, translucent label greys, low-alpha fills, and
+system blue as the tint. Categories draw from the system accents Calendar uses: Academics
+indigo, Build orange, Learning teal, Personal blue, Health pink, Leisure green, Other grey.
+Structural blocks (breaks, travel, meals) are greys and browns so work stands out.
 
-| Role | Light | Dark |
-| --- | --- | --- |
-| Background | `#FBFAF7` | `#0F1110` |
-| Surface | `#FFFFFF` | `#181A19` |
-| Surface raised | `#F4F2EC` | `#212423` |
-| Primary | `#1F5245` | `#8FC5B1` |
-| Outline | `#E4E1D8` | `#2C302E` |
-| Text | `#15181A` | `#ECEDEA` |
-| Muted text | `#6B6E6A` | `#9BA09B` |
-
-Category accents, tuned per theme in `ui/theme/CategoryColors.kt`:
-Academics slate blue, Build evergreen, Learning muted violet, Personal taupe,
-Health clay, Leisure ochre, Other grey.
-
-Urgency uses a single clay red, only for genuinely late or at-risk work.
+Today's header is a sky (`DaySky`) keyed to the phase of the day: dawn, day, dusk, night.
+It is content, not glass, and gives the glass something real to refract.
 
 ## Type
 
-The platform sans at deliberate sizes. Times in the timeline gutter are tabular so they
-align in a column. Weight, not colour, carries hierarchy.
+SF Pro cannot ship on Android, so type is set in **Inter 4.1** (bundled, SIL OFL) using its
+optical-size axis the way SF uses its Text and Display cuts: 14pt optics below 20sp, 32pt
+optics for titles, with Inter's dynamic tracking. Sizes are Apple's Dynamic Type defaults.
 
-| Style | Size / weight | Used for |
-| --- | --- | --- |
-| Display | 34 / Medium, -0.5 tracking | The current activity name |
-| Title | 20 / Medium | Screen titles, sheet titles |
-| Body | 15 / Regular | Most content |
-| Label | 13 / Medium, 0.1 tracking | Metadata, chips |
-| Time | 13 / Medium, tabular figures | Timeline gutter |
+| Style | Size / weight |
+| --- | --- |
+| Large title | 34 / Bold |
+| Title 1 · 2 · 3 | 28 / Bold · 22 / Bold · 20 / Semibold |
+| Headline · Body | 17 / Semibold · 17 / Regular |
+| Subheadline · Footnote | 15 · 13 |
+| Caption 1 · 2 | 12 · 11 |
+| Timer | 64 / Semibold, tabular |
 
-## Space and shape
+Times and counts use tabular figures so columns line up.
 
-A 4dp base scale: 4, 8, 12, 16, 20, 24, 32. Screen gutter is 20dp. Corner radii are
-restrained: 10dp for cards, 12dp for sheets, 8dp for chips, full only for small round
-icon buttons. Elevation is used almost nowhere; separation comes from a 1dp outline
-and a surface shift.
+## Shape and space
+
+Continuous-corner squircles (`SmoothRoundedCornerShape`, Figma's corner smoothing at 0.6)
+with concentric radii: hero 28, card 24, tile 18, field 12, icon tile 8, sheet 38. Controls
+near an edge are capsules. A 4dp grid with a 16dp screen margin, iOS's inset-grouped margin.
+
+## Controls
+
+Rebuilt at iOS proportions rather than restyled Material: 51×31 switch, capsule segmented
+control with a sliding thumb, minus/plus stepper, wheel time picker in five-minute steps,
+capsule buttons, and sheets with a grabber, Cancel on the left and the confirming action on
+the right. Rows highlight grey under the finger instead of rippling; buttons compress, glass
+lifts. Haptics mark selection changes and completions only.
 
 ## Motion
 
-Short and functional. 150ms for state changes, 250ms for entering content. The only
-expressive moment is the progress ring on the focus screen, and it moves once a second.
+Springs, not tweens, for anything that moves under the finger: the tab lozenge, the switch
+thumb, the segmented control. Pushed screens slide in from the edge with a parallax on the
+screen underneath; tabs cross-fade. The focus ring counts down to the second.
+
+## Screens
+
+- **Today** — the sky, a hero Now card, quick actions, then the day by part (Morning,
+  Afternoon, Evening) with college as one line.
+- **Plan** — a Calendar-style day grid with a week strip and a red now-line. Tap empty time
+  to add an event there.
+- **Tasks** — Reminders-style: completion rings, `!!` priority, grouped by due date.
+- **Insights** — Health-style cards: coloured label, one big number, one chart.
+- **Settings** — iOS Settings with coloured icon tiles; the timetable lives here.
+- **Focus** — always dark, lit by the colour of the work, clear glass controls.
 
 ## Components
 
-`ui/components` holds the shared vocabulary: `SectionHeader`, `MarginCard`, `BlockRow`,
-`CategoryDot`, `AccentRail`, `MetaChip`, `StatRow`, `ProportionBar`, `EmptyState`,
-`ErrorState`, `LabeledField`, `MarginTextField`, `TimeField`, `DurationPicker`,
-`CategoryPicker`, `PriorityPicker`, `DifficultyPicker`, `StepperRow`, `SheetGrabber`,
-`SheetAction` and `BlockActionsSheet`. `NowCard` lives with the Today screen because it is
-the only place display type is used. Every screen is assembled from these, which is what
-keeps spacing and hierarchy consistent without a spec to police.
+`ui/components`: `LargeTitleScreen`, `GroupedSection`, `GroupedRow`, `RowSeparator`,
+`SectionTitle`, `FormHeader`/`FormFooter`, `IconTile`, `ProgressRing`, `ProportionBar`,
+`StatTile`, `EmptyState`, `PrimaryButton`, `SecondaryButton`, `CircleIconButton`,
+`TextAction`, `IosSwitch`, `SegmentedControl`, `CapsuleChip`, `OptionChips`, `IosStepper`,
+`FormTextField`, `CapsuleTextField`, `TimeRow`, `DurationRow`, `WheelTimePicker`,
+`MarginSheet`, `TimelineRow`, `CollegeRow`, `BlockActionsSheet`, `DaySky`.
+`ui/glass`: `GlassSurface`, `GlassTabBar`, `GlassCircleButton`, `GlassTextButton`,
+`TopScrollEdge`.

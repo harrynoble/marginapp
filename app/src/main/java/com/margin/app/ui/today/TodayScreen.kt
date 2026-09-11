@@ -1,70 +1,74 @@
 package com.margin.app.ui.today
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Coffee
-import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.domain.planner.EnergyMode
 import com.margin.app.ui.components.BlockActionCallbacks
 import com.margin.app.ui.components.BlockActionsSheet
-import com.margin.app.ui.components.BlockRow
+import com.margin.app.ui.components.CapsuleChip
+import com.margin.app.ui.components.CollegeRow
+import com.margin.app.ui.components.DaySky
 import com.margin.app.ui.components.EmptyState
-import com.margin.app.ui.components.MarginCard
-import com.margin.app.ui.components.MetaChip
-import com.margin.app.ui.components.SectionHeader
+import com.margin.app.ui.components.GroupedRow
+import com.margin.app.ui.components.GroupedSection
+import com.margin.app.ui.components.IconTile
+import com.margin.app.ui.components.LargeTitleScreen
+import com.margin.app.ui.components.RowSeparator
+import com.margin.app.ui.components.SectionTitle
+import com.margin.app.ui.components.StatTile
+import com.margin.app.ui.components.TimelineRow
+import com.margin.app.ui.glass.GlassCircleButton
+import com.margin.app.ui.glass.rememberGlassBackdrop
+import com.margin.app.ui.theme.AppleType
+import com.margin.app.ui.theme.MarginShape
+import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.Space
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
- * The screen the app opens to. In order: what is happening now, what is next, and how the
- * rest of the day looks. Nothing else competes for that hierarchy.
+ * The screen the app opens to. In order: what is happening now, what is next, and how the rest
+ * of the day looks. College appears as a single line; the timetable itself never does.
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TodayScreen(
     viewModel: TodayViewModel,
     onOpenSettings: () -> Unit,
-    onOpenAssistant: () -> Unit,
     onOpenFocus: (Long) -> Unit,
     onOpenTask: (Long) -> Unit,
     onOpenCheckIn: () -> Unit,
@@ -72,11 +76,12 @@ fun TodayScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val banner by viewModel.banner.collectAsStateWithLifecycle()
-    val busy by viewModel.busy.collectAsStateWithLifecycle()
+    val colors = MarginTheme.colors
+    val backdrop = rememberGlassBackdrop()
 
     var sheetBlock by remember { mutableStateOf<ScheduleBlock?>(null) }
-    var showEarlier by remember { mutableStateOf(false) }
-    var showBreakOptions by remember { mutableStateOf(false) }
+    var showEarlier by rememberSaveable { mutableStateOf(false) }
+    var choosingBreak by remember { mutableStateOf(false) }
 
     val callbacks = remember(viewModel) {
         BlockActionCallbacks(
@@ -85,210 +90,213 @@ fun TodayScreen(
             onSkip = { id, resolution -> viewModel.skip(id, resolution) },
             onExtend = { id, minutes -> viewModel.extend(id, minutes) },
             onMove = { id, minute -> viewModel.move(id, minute) },
-            onMoveToTomorrow = { id -> viewModel.moveToTomorrow(id) },
+            onMoveToTomorrow = { viewModel.moveToTomorrow(it) },
             onTogglePin = { id, locked -> viewModel.togglePin(id, locked) },
             onOpenTask = onOpenTask,
         )
     }
 
-    Scaffold(
+    val view = remember(state) { TodayView.from(state) }
+
+    LargeTitleScreen(
+        title = "Today",
+        eyebrow = state.date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())),
+        backdrop = backdrop,
         modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = MarginTime.dayLabel(state.date),
-                            style = MaterialTheme.typography.titleLarge,
-                        )
-                        if (state.headline.isNotBlank()) {
-                            Text(
-                                text = state.headline,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onOpenAssistant) {
-                        Icon(
-                            imageVector = Icons.Outlined.AutoAwesome,
-                            contentDescription = "Tell Margin something",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = { viewModel.replan() }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Refresh,
-                            contentDescription = "Rebuild the plan",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = "Settings",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
+        background = { DaySky(minuteOfDay = state.nowMinute) },
+        actions = {
+            GlassCircleButton(
+                backdrop = backdrop,
+                icon = Icons.Rounded.Settings,
+                contentDescription = "Settings",
+                onClick = onOpenSettings,
             )
         },
-    ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            AnimatedVisibility(visible = busy) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        item(key = "now") {
+            NowCard(
+                subject = view.now,
+                nowMinute = state.nowMinute,
+                use24Hour = state.use24Hour,
+                nextLabel = view.nextLabel(state.use24Hour),
+                onStart = { block ->
+                    viewModel.start(block.id)
+                    if (block.type.isWork) onOpenFocus(block.id)
+                },
+                onFinish = { viewModel.complete(it.id) },
+                onPause = { viewModel.pause(it.id) },
+                onSkip = { sheetBlock = it },
+                onMore = { sheetBlock = it },
+                onRebuild = { viewModel.replan() },
+                modifier = Modifier.padding(top = Space.xs),
+            )
+        }
+
+        item(key = "quick") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = Space.gutter, vertical = Space.l),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (choosingBreak) {
+                    listOf(5, 10, 15, 30, 45).forEach { minutes ->
+                        CapsuleChip(
+                            text = "$minutes min",
+                            selected = false,
+                            onClick = {
+                                choosingBreak = false
+                                viewModel.takeBreak(minutes)
+                            },
+                        )
+                    }
+                    CapsuleChip(text = "Cancel", selected = false, onClick = { choosingBreak = false })
+                } else {
+                    CapsuleChip(
+                        text = "Take a break",
+                        selected = false,
+                        onClick = { choosingBreak = true },
+                        leading = {
+                            Icon(
+                                Icons.Rounded.Coffee,
+                                contentDescription = null,
+                                tint = colors.label,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                    val light = state.energyMode == EnergyMode.LIGHT
+                    CapsuleChip(
+                        text = if (light) "Light day" else "Keep today light",
+                        selected = light,
+                        onClick = {
+                            viewModel.setEnergyMode(if (light) EnergyMode.NORMAL else EnergyMode.LIGHT)
+                        },
+                        leading = {
+                            Icon(
+                                Icons.Rounded.Spa,
+                                contentDescription = null,
+                                tint = if (light) colors.onTint else colors.label,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
+        banner?.let { change ->
+            item(key = "banner") {
+                ChangeCard(banner = change, onDismiss = viewModel::dismissBanner)
+            }
+        }
+
+        if (state.checkInDue) {
+            item(key = "checkin") {
+                GroupedSection(modifier = Modifier.padding(top = Space.s)) {
+                    GroupedRow(
+                        title = "Close out the day",
+                        subtitle = "A short review, then unfinished work carries forward.",
+                        leading = { IconTile(Icons.Rounded.Bedtime, MarginTheme.accents.indigo) },
+                        showChevron = true,
+                        onClick = onOpenCheckIn,
+                    )
+                }
+            }
+        }
+
+        view.sections.forEach { (part, items) ->
+            item(key = "title-${part.name}") { SectionTitle(part.label) }
+            item(key = "list-${part.name}") {
+                GroupedSection {
+                    items.forEachIndexed { index, item ->
+                        if (index > 0) RowSeparator(inset = TimelineSeparatorInset)
+                        when (item) {
+                            is TimelineItem.College -> CollegeRow(
+                                college = item,
+                                use24Hour = state.use24Hour,
+                                nowMinute = state.nowMinute,
+                            )
+                            is TimelineItem.Single -> TimelineRow(
+                                block = item.block,
+                                use24Hour = state.use24Hour,
+                                onClick = if (item.block.type == BlockType.FREE) null else ({ sheetBlock = item.block }),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (view.sections.isEmpty() && !state.loading) {
+            item(key = "empty") {
+                EmptyState(
+                    title = "Nothing else today",
+                    body = "The rest of the day is yours. Add something with the plus button if you want.",
                 )
             }
+        }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = Space.gutter,
-                    end = Space.gutter,
-                    top = Space.s,
-                    bottom = Space.xxxl * 2,
-                ),
-                verticalArrangement = Arrangement.spacedBy(Space.s),
-            ) {
-                banner?.let { change ->
-                    item(key = "banner") {
-                        ChangeBannerCard(banner = change, onDismiss = viewModel::dismissBanner)
-                        Spacer(Modifier.height(Space.s))
-                    }
-                }
-
-                if (state.checkInDue) {
-                    item(key = "checkin") {
-                        MarginCard(onClick = onOpenCheckIn) {
-                            Text(
-                                text = "Ready to close out the day?",
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Spacer(Modifier.height(Space.xs))
-                            Text(
-                                text = "A short review, then Margin carries the unfinished work forward.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Spacer(Modifier.height(Space.s))
-                    }
-                }
-
-                item(key = "now") {
-                    val current = state.current
-                    if (current != null) {
-                        NowCard(
-                            block = current,
-                            nowMinute = state.nowMinute,
-                            use24Hour = state.use24Hour,
-                            onStart = {
-                                viewModel.start(current.id)
-                                if (current.type.isWork) onOpenFocus(current.id)
-                            },
-                            onPause = { viewModel.pause(current.id) },
-                            onComplete = { viewModel.complete(current.id) },
-                            onMore = { sheetBlock = current },
-                        )
-                    } else {
-                        OpenNowCard(
-                            nextBlock = state.nextMeaningful,
-                            use24Hour = state.use24Hour,
-                            onPlan = { viewModel.replan() },
-                            outsideWakingHours = state.outsideWakingHours,
-                            wakeMinute = state.wakeMinute,
-                        )
-                    }
-                }
-
-                item(key = "quick") {
-                    Spacer(Modifier.height(Space.xs))
-                    QuickActions(
-                        showBreakOptions = showBreakOptions,
-                        onToggleBreak = { showBreakOptions = !showBreakOptions },
-                        onBreak = { minutes ->
-                            showBreakOptions = false
-                            viewModel.takeBreak(minutes)
-                        },
-                        onEnergy = viewModel::setEnergyMode,
-                        currentMode = state.energyMode,
-                    )
-                    Spacer(Modifier.height(Space.m))
-                }
-
-                if (state.upcoming.isNotEmpty()) {
-                    item(key = "next-header") {
-                        SectionHeader("Next")
-                        Spacer(Modifier.height(Space.xs))
-                    }
-                    items(
-                        items = state.upcoming,
-                        key = { "up-${it.id}" },
-                    ) { block ->
-                        BlockRow(
-                            block = block,
-                            use24Hour = state.use24Hour,
-                            onClick = { sheetBlock = block },
-                        )
-                    }
-                } else if (!state.loading) {
-                    item(key = "empty") {
-                        EmptyState(
-                            title = "Nothing left on the schedule",
-                            body = "Add a task or let Margin rebuild the day.",
-                        )
-                    }
-                }
-
-                if (state.earlier.isNotEmpty()) {
-                    item(key = "earlier-header") {
-                        Spacer(Modifier.height(Space.m))
-                        SectionHeader(
-                            text = "Earlier",
-                            trailing = {
-                                TextButton(onClick = { showEarlier = !showEarlier }) {
-                                    Text(
-                                        text = if (showEarlier) "Hide" else "Show",
-                                        style = MaterialTheme.typography.labelMedium,
-                                    )
-                                }
-                            },
-                        )
-                    }
+        if (view.earlier.isNotEmpty()) {
+            item(key = "earlier-title") {
+                SectionTitle(
+                    text = "Earlier",
+                    trailing = if (showEarlier) "Hide" else "Show",
+                    onTrailing = { showEarlier = !showEarlier },
+                )
+            }
+            item(key = "earlier-list") {
+                GroupedSection {
                     if (showEarlier) {
-                        items(items = state.earlier, key = { "past-${it.id}" }) { block ->
-                            BlockRow(block = block, use24Hour = state.use24Hour)
+                        view.earlier.forEachIndexed { index, item ->
+                            if (index > 0) RowSeparator(inset = TimelineSeparatorInset)
+                            when (item) {
+                                is TimelineItem.College -> CollegeRow(item, state.use24Hour, state.nowMinute)
+                                is TimelineItem.Single -> TimelineRow(item.block, state.use24Hour)
+                            }
                         }
                     } else {
-                        item(key = "earlier-summary") {
-                            val done = state.earlier.count { it.status == BlockStatus.DONE }
-                            val skipped = state.earlier.count { it.status == BlockStatus.SKIPPED }
-                            Text(
-                                text = buildString {
-                                    append("$done finished")
-                                    if (skipped > 0) append(", $skipped skipped")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = Space.xs),
-                            )
-                        }
+                        GroupedRow(
+                            title = buildString {
+                                append("${view.earlierDone} finished")
+                                if (view.earlierSkipped > 0) append(" · ${view.earlierSkipped} skipped")
+                            },
+                            onClick = { showEarlier = true },
+                            showChevron = true,
+                        )
                     }
                 }
+            }
+        }
 
-                item(key = "summary") {
-                    Spacer(Modifier.height(Space.l))
-                    DaySummaryStrip(state = state)
-                }
+        item(key = "summary") {
+            SectionTitle("So far")
+            Row(
+                modifier = Modifier.padding(horizontal = Space.gutter),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                StatTile(
+                    value = MarginTime.formatDurationShort(state.completedWorkMinutes),
+                    label = "Done",
+                    accent = colors.positive,
+                    modifier = Modifier.weight(1f),
+                )
+                StatTile(
+                    value = MarginTime.formatDurationShort(
+                        (state.plannedWorkMinutes - state.completedWorkMinutes).coerceAtLeast(0),
+                    ),
+                    label = "Planned",
+                    accent = colors.tint,
+                    modifier = Modifier.weight(1f),
+                )
+                StatTile(
+                    value = MarginTime.formatDurationShort(state.freeRemainingMinutes),
+                    label = "Free",
+                    accent = MarginTheme.accents.green,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -297,142 +305,117 @@ fun TodayScreen(
         BlockActionsSheet(
             block = block,
             use24Hour = state.use24Hour,
-            nowMinute = state.nowMinute,
             callbacks = callbacks,
             onDismiss = { sheetBlock = null },
         )
     }
 }
 
+/** Separators in the timeline start where the title does, past the time and the rail. */
+private val TimelineSeparatorInset = Space.l + 76.dp + 4.dp + Space.m
+
+/** A plan change explained in plain words, then dismissed. */
 @Composable
-private fun ChangeBannerCard(banner: ChangeBanner, onDismiss: () -> Unit) {
-    MarginCard(color = MaterialTheme.colorScheme.surfaceContainerHighest, border = false) {
-        Row(verticalAlignment = Alignment.Top) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Schedule updated",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Spacer(Modifier.height(Space.xs))
-                banner.lines.forEach { line ->
-                    Text(
-                        text = line,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                banner.protectedNote?.let {
-                    Spacer(Modifier.height(Space.xs))
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                Icon(
-                    imageVector = Icons.Outlined.Close,
-                    contentDescription = "Dismiss",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
+private fun ChangeCard(banner: ChangeBanner, onDismiss: () -> Unit) {
+    val colors = MarginTheme.colors
+    Column(
+        modifier = Modifier
+            .padding(horizontal = Space.gutter)
+            .fillMaxWidth()
+            .clip(MarginShape.card)
+            .background(colors.surface)
+            .padding(Space.l),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Schedule updated",
+                style = AppleType.headline,
+                color = colors.label,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Dismiss",
+                tint = colors.tertiaryLabel,
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(MarginShape.capsule)
+                    .clickable(onClick = onDismiss)
+                    .padding(4.dp),
+            )
+        }
+        Spacer(Modifier.height(Space.xs))
+        banner.lines.forEach { line ->
+            Text(text = line, style = AppleType.subheadline, color = colors.secondaryLabel)
+        }
+        banner.protectedNote?.let {
+            Spacer(Modifier.height(Space.s))
+            Text(text = it, style = AppleType.footnoteEmphasized, color = colors.positive)
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun QuickActions(
-    showBreakOptions: Boolean,
-    onToggleBreak: () -> Unit,
-    onBreak: (Int) -> Unit,
-    onEnergy: (com.margin.app.domain.planner.EnergyMode) -> Unit,
-    currentMode: com.margin.app.domain.planner.EnergyMode,
+/** The Today screen, arranged for display. */
+private class TodayView(
+    val now: NowSubject,
+    val next: TimelineItem?,
+    val sections: List<Pair<Timeline.Part, List<TimelineItem>>>,
+    val earlier: List<TimelineItem>,
+    val earlierDone: Int,
+    val earlierSkipped: Int,
 ) {
-    Column {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-            AssistChip(
-                onClick = onToggleBreak,
-                label = { Text("Take a break") },
-                leadingIcon = {
-                    Icon(
-                        Icons.Outlined.Coffee,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                    )
-                },
-                shape = MaterialTheme.shapes.small,
-                colors = AssistChipDefaults.assistChipColors(
-                    labelColor = MaterialTheme.colorScheme.onSurface,
-                    leadingIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            )
-            AssistChip(
-                onClick = {
-                    onEnergy(
-                        if (currentMode == com.margin.app.domain.planner.EnergyMode.LIGHT) {
-                            com.margin.app.domain.planner.EnergyMode.NORMAL
-                        } else {
-                            com.margin.app.domain.planner.EnergyMode.LIGHT
-                        },
-                    )
-                },
-                label = {
-                    Text(
-                        if (currentMode == com.margin.app.domain.planner.EnergyMode.LIGHT) {
-                            "Light day on"
-                        } else {
-                            "Keep today light"
-                        },
-                    )
-                },
-                shape = MaterialTheme.shapes.small,
-                colors = AssistChipDefaults.assistChipColors(
-                    labelColor = MaterialTheme.colorScheme.onSurface,
-                ),
-            )
-        }
-        AnimatedVisibility(visible = showBreakOptions) {
-            FlowRow(
-                modifier = Modifier.padding(top = Space.s),
-                horizontalArrangement = Arrangement.spacedBy(Space.s),
-            ) {
-                listOf(5, 10, 15, 30, 45).forEach { minutes ->
-                    AssistChip(
-                        onClick = { onBreak(minutes) },
-                        label = { Text("$minutes min") },
-                        shape = MaterialTheme.shapes.small,
-                        colors = AssistChipDefaults.assistChipColors(
-                            labelColor = MaterialTheme.colorScheme.onSurface,
-                        ),
-                    )
-                }
-            }
-        }
+    fun nextLabel(use24Hour: Boolean): String? = when (val n = next) {
+        null -> null
+        is TimelineItem.College -> "College at " + MarginTime.formatTime(n.start, use24Hour)
+        is TimelineItem.Single -> n.block.title + " at " + MarginTime.formatTime(n.block.start, use24Hour)
     }
-}
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun DaySummaryStrip(state: TodayUiState) {
-    MarginCard(color = MaterialTheme.colorScheme.surfaceContainerHighest, border = false) {
-        SectionHeader("Today so far")
-        Spacer(Modifier.height(Space.m))
-        com.margin.app.ui.components.ProportionBar(fraction = state.progress)
-        Spacer(Modifier.height(Space.m))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-            MetaChip(
-                text = MarginTime.formatDuration(state.completedWorkMinutes) + " done",
+    companion object {
+        fun from(state: TodayUiState): TodayView {
+            val nowMinute = state.nowMinute
+            val live = Timeline.collapse(listOfNotNull(state.current) + state.upcoming)
+
+            val nowItem = live.firstOrNull { item ->
+                nowMinute >= item.start && nowMinute < item.end && when (item) {
+                    is TimelineItem.College -> true
+                    is TimelineItem.Single -> item.block.id == state.current?.id
+                }
+            } ?: live.firstOrNull { item ->
+                item is TimelineItem.Single && item.block.id == state.current?.id
+            }
+
+            val rest = live.filter { it != nowItem }
+            val next = rest.firstOrNull {
+                it !is TimelineItem.Single || it.block.type != BlockType.FREE
+            }
+
+            val now: NowSubject = when (nowItem) {
+                is TimelineItem.College -> NowSubject.AtCollege(nowItem)
+                is TimelineItem.Single -> {
+                    val block = nowItem.block
+                    if (block.type.isActionable) NowSubject.Work(block) else NowSubject.Fixed(block)
+                }
+                null -> NowSubject.Open(
+                    outsideHours = state.outsideWakingHours,
+                    wakeMinute = state.wakeMinute,
+                    freeUntil = next?.start,
+                )
+            }
+
+            val sections = rest
+                .groupBy { Timeline.partOf(it.start) }
+                .toList()
+                .sortedBy { it.first.ordinal }
+
+            val earlierBlocks = state.earlier.filter { it.type != BlockType.SLEEP }
+            return TodayView(
+                now = now,
+                next = next,
+                sections = sections,
+                earlier = Timeline.collapse(earlierBlocks),
+                earlierDone = earlierBlocks.count { it.status == BlockStatus.DONE },
+                earlierSkipped = earlierBlocks.count { it.status == BlockStatus.SKIPPED },
             )
-            MetaChip(
-                text = MarginTime.formatDuration(
-                    (state.plannedWorkMinutes - state.completedWorkMinutes).coerceAtLeast(0),
-                ) + " planned left",
-            )
-            MetaChip(text = MarginTime.formatDuration(state.freeRemainingMinutes) + " free left")
         }
     }
 }

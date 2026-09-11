@@ -1,97 +1,130 @@
 package com.margin.app.ui.theme
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.margin.app.ui.components.HighlightIndication
 
-private val LightScheme = lightColorScheme(
-    primary = LightPrimary,
-    onPrimary = LightOnPrimary,
-    primaryContainer = LightPrimaryContainer,
-    onPrimaryContainer = LightOnPrimaryContainer,
-    secondary = LightSecondary,
-    onSecondary = LightOnPrimary,
-    secondaryContainer = LightSurfaceRaised,
-    onSecondaryContainer = LightOnSurface,
-    tertiary = LightSecondary,
-    onTertiary = LightOnPrimary,
-    background = LightBackground,
-    onBackground = LightOnSurface,
-    surface = LightSurface,
-    onSurface = LightOnSurface,
-    surfaceVariant = LightSurfaceRaised,
-    onSurfaceVariant = LightOnSurfaceVariant,
-    surfaceContainer = LightSurfaceRaised,
-    surfaceContainerHigh = LightSurfaceRaised,
-    surfaceContainerLow = LightSurface,
-    surfaceContainerLowest = LightSurface,
-    surfaceContainerHighest = LightSurfaceSunken,
-    outline = LightOutline,
-    outlineVariant = LightOutlineVariant,
-    error = LightError,
-    onError = Color.White,
-    errorContainer = LightErrorContainer,
-    onErrorContainer = LightOnErrorContainer,
-    scrim = Color(0x99000000),
-)
+val LocalMarginColors = staticCompositionLocalOf { LightColors }
+val LocalAccents = staticCompositionLocalOf { LightAccents }
 
-private val DarkScheme = darkColorScheme(
-    primary = DarkPrimary,
-    onPrimary = DarkOnPrimary,
-    primaryContainer = DarkPrimaryContainer,
-    onPrimaryContainer = DarkOnPrimaryContainer,
-    secondary = DarkSecondary,
-    onSecondary = DarkOnPrimary,
-    secondaryContainer = DarkSurfaceRaised,
-    onSecondaryContainer = DarkOnSurface,
-    tertiary = DarkSecondary,
-    onTertiary = DarkOnPrimary,
-    background = DarkBackground,
-    onBackground = DarkOnSurface,
-    surface = DarkSurface,
-    onSurface = DarkOnSurface,
-    surfaceVariant = DarkSurfaceRaised,
-    onSurfaceVariant = DarkOnSurfaceVariant,
-    surfaceContainer = DarkSurfaceRaised,
-    surfaceContainerHigh = DarkSurfaceRaised,
-    surfaceContainerLow = DarkSurface,
-    surfaceContainerLowest = DarkSurfaceSunken,
-    surfaceContainerHighest = DarkSurfaceRaised,
-    outline = DarkOutline,
-    outlineVariant = DarkOutlineVariant,
-    error = DarkError,
-    onError = Color(0xFF2B0D08),
-    errorContainer = DarkErrorContainer,
-    onErrorContainer = DarkOnErrorContainer,
-    scrim = Color(0xCC000000),
-)
+/** Access point for the semantic palette, mirroring MaterialTheme. */
+object MarginTheme {
+    val colors: MarginColors
+        @Composable @ReadOnlyComposable get() = LocalMarginColors.current
 
-/** Category accents are theme dependent, so they travel with the theme rather than as constants. */
-val LocalCategoryColors = staticCompositionLocalOf { CategoryLight }
+    val accents: SystemAccents
+        @Composable @ReadOnlyComposable get() = LocalAccents.current
+}
 
+/**
+ * Follows the system appearance. Ripples are switched off app-wide in favour of the iOS
+ * behaviour: a row highlights grey while pressed, and buttons compress slightly.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MarginTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val scheme = if (darkTheme) DarkScheme else LightScheme
-    val accents = if (darkTheme) CategoryDark else CategoryLight
+    val colors = if (darkTheme) DarkColors else LightColors
+    val accents = if (darkTheme) DarkAccents else LightAccents
+    val scheme = remember(colors) { schemeFor(colors) }
+    val highlight = remember(darkTheme) {
+        HighlightIndication(if (darkTheme) Color(0x2EFFFFFF) else Color(0x1F000000))
+    }
 
     CompositionLocalProvider(
-        LocalCategoryColors provides accents,
-        LocalTextStyle provides MarginTypography.bodyMedium,
+        LocalMarginColors provides colors,
+        LocalAccents provides accents,
     ) {
         MaterialTheme(
             colorScheme = scheme,
             typography = MarginTypography,
             shapes = MarginShapes,
-            content = content,
+        ) {
+            CompositionLocalProvider(
+                LocalContentColor provides colors.label,
+                LocalIndication provides highlight,
+                LocalRippleConfiguration provides null,
+                content = content,
+            )
+        }
+    }
+}
+
+/** Material pickers and dialogs read this, so they sit inside the same palette. */
+private fun schemeFor(c: MarginColors): ColorScheme {
+    val primaryContainer = c.tint.copy(alpha = if (c.isDark) 0.24f else 0.14f)
+    return if (c.isDark) {
+        darkColorScheme(
+            primary = c.tint,
+            onPrimary = c.onTint,
+            primaryContainer = primaryContainer,
+            onPrimaryContainer = c.tint,
+            secondary = c.tint,
+            onSecondary = c.onTint,
+            secondaryContainer = c.tertiaryFill,
+            onSecondaryContainer = c.label,
+            tertiary = c.tint,
+            onTertiary = c.onTint,
+            background = c.groupedBackground,
+            onBackground = c.label,
+            surface = c.surface,
+            onSurface = c.label,
+            surfaceVariant = c.surfaceElevated,
+            onSurfaceVariant = c.secondaryLabel,
+            surfaceContainerLowest = c.surface,
+            surfaceContainerLow = c.surface,
+            surfaceContainer = c.surface,
+            surfaceContainerHigh = c.surfaceElevated,
+            surfaceContainerHighest = c.surfaceElevated,
+            outline = c.separator,
+            outlineVariant = c.separator,
+            error = c.destructive,
+            onError = Color.White,
+            scrim = c.scrim,
+        )
+    } else {
+        lightColorScheme(
+            primary = c.tint,
+            onPrimary = c.onTint,
+            primaryContainer = primaryContainer,
+            onPrimaryContainer = c.tint,
+            secondary = c.tint,
+            onSecondary = c.onTint,
+            secondaryContainer = c.tertiaryFill,
+            onSecondaryContainer = c.label,
+            tertiary = c.tint,
+            onTertiary = c.onTint,
+            background = c.groupedBackground,
+            onBackground = c.label,
+            surface = c.surface,
+            onSurface = c.label,
+            surfaceVariant = c.surfaceElevated,
+            onSurfaceVariant = c.secondaryLabel,
+            surfaceContainerLowest = c.surface,
+            surfaceContainerLow = c.surface,
+            surfaceContainer = c.surface,
+            surfaceContainerHigh = c.surface,
+            surfaceContainerHighest = c.surfaceElevated,
+            outline = c.separator,
+            outlineVariant = c.separator,
+            error = c.destructive,
+            onError = Color.White,
+            scrim = c.scrim,
         )
     }
 }

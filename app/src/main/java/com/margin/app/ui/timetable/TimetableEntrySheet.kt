@@ -1,27 +1,8 @@
 package com.margin.app.ui.timetable
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -32,16 +13,23 @@ import androidx.compose.ui.Modifier
 import com.margin.app.domain.model.Subject
 import com.margin.app.domain.model.TimetableEntry
 import com.margin.app.domain.model.TimetableKind
-import com.margin.app.ui.components.LabeledField
-import com.margin.app.ui.components.MarginTextField
-import com.margin.app.ui.components.SheetGrabber
-import com.margin.app.ui.components.TimeField
+import com.margin.app.ui.components.FormTextField
+import com.margin.app.ui.components.GroupedRow
+import com.margin.app.ui.components.GroupedSection
+import com.margin.app.ui.components.MarginSheet
+import com.margin.app.ui.components.OptionChips
+import com.margin.app.ui.components.RowSeparator
+import com.margin.app.ui.components.TextAction
+import com.margin.app.ui.components.TimeRow
+import com.margin.app.ui.theme.AppleType
+import com.margin.app.ui.theme.MarginShape
+import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.Space
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/** One recurring class. Changes apply to every week from now on. */
 @Composable
 fun TimetableEntrySheet(
     entry: TimetableEntry?,
@@ -53,8 +41,7 @@ fun TimetableEntrySheet(
     onDelete: (() -> Unit)?,
     onCancelToday: (() -> Unit)? = null,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-
+    val colors = MarginTheme.colors
     var title by remember { mutableStateOf(entry?.title.orEmpty()) }
     var faculty by remember { mutableStateOf(entry?.faculty.orEmpty()) }
     var location by remember { mutableStateOf(entry?.location.orEmpty()) }
@@ -63,188 +50,132 @@ fun TimetableEntrySheet(
     var selectedDay by remember { mutableStateOf(entry?.dayOfWeek ?: day) }
     var start by remember { mutableIntStateOf(entry?.start ?: (9 * 60)) }
     var end by remember { mutableIntStateOf(entry?.end ?: (10 * 60)) }
+    var confirmingDelete by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        dragHandle = null,
+    MarginSheet(
+        onDismiss = onDismiss,
+        title = if (entry == null) "New Class" else "Class",
+        trailingText = if (entry == null) "Add" else "Done",
+        trailingEnabled = end > start,
+        onTrailing = {
+            val base = entry ?: TimetableEntry(
+                dayOfWeek = selectedDay,
+                start = start,
+                end = end,
+                subjectCode = subjectCode,
+                title = title,
+                kind = kind,
+            )
+            onSave(
+                base.copy(
+                    dayOfWeek = selectedDay,
+                    start = start,
+                    end = end,
+                    subjectCode = subjectCode,
+                    title = title.trim().ifBlank { subjectCode ?: "Class" },
+                    kind = kind,
+                    faculty = faculty.trim().ifBlank { null },
+                    location = location.trim().ifBlank { null },
+                ),
+            )
+        },
     ) {
-        Column(
-            modifier = Modifier
-                .padding(horizontal = Space.gutter)
-                .padding(top = Space.xl, bottom = Space.l)
-                .verticalScroll(rememberScrollState())
-                .imePadding()
-                .navigationBarsPadding(),
-        ) {
-            SheetGrabber()
-            Spacer(Modifier.height(Space.l))
-            Text(
-                text = if (entry == null) "New class" else "Edit class",
-                style = MaterialTheme.typography.titleLarge,
+        GroupedSection(modifier = Modifier.padding(top = Space.s)) {
+            FormTextField(value = title, onValueChange = { title = it }, placeholder = "Subject or activity")
+            RowSeparator()
+            FormTextField(value = faculty, onValueChange = { faculty = it }, placeholder = "Faculty")
+            RowSeparator()
+            FormTextField(value = location, onValueChange = { location = it }, placeholder = "Room")
+        }
+
+        GroupedSection(header = "Day") {
+            OptionChips(
+                options = DayOfWeek.entries,
+                selected = selectedDay,
+                label = { it.getDisplayName(TextStyle.SHORT, Locale.getDefault()) },
+                onSelect = { selectedDay = it },
             )
+        }
 
-            Spacer(Modifier.height(Space.l))
-            MarginTextField(
-                value = title,
-                onValueChange = { title = it },
-                placeholder = "Subject or activity",
+        GroupedSection(header = "Time") {
+            TimeRow(
+                title = "Starts",
+                minute = start,
+                use24Hour = use24Hour,
+                onChange = {
+                    start = it
+                    if (end <= start) end = (start + 50).coerceAtMost(24 * 60 - 5)
+                },
             )
+            RowSeparator()
+            TimeRow(
+                title = "Ends",
+                minute = end,
+                use24Hour = use24Hour,
+                onChange = { end = it.coerceAtLeast(start + 5) },
+            )
+        }
 
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Day") {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    DayOfWeek.entries.forEach { d ->
-                        FilterChip(
-                            selected = selectedDay == d,
-                            onClick = { selectedDay = d },
-                            label = {
-                                Text(d.getDisplayName(TextStyle.SHORT, Locale.getDefault()).take(3))
-                            },
-                            shape = MaterialTheme.shapes.small,
-                            colors = FilterChipDefaults.filterChipColors(
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            ),
-                        )
-                    }
-                }
-            }
+        GroupedSection(header = "Kind") {
+            OptionChips(
+                options = TimetableKind.entries,
+                selected = kind,
+                label = { it.label },
+                onSelect = { kind = it },
+            )
+        }
 
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Time") {
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    TimeField(
-                        minute = start,
-                        use24Hour = use24Hour,
-                        label = "From",
-                        onChange = {
-                            start = it
-                            if (end <= start) end = (start + 50).coerceAtMost(24 * 60)
-                        },
-                    )
-                    TimeField(
-                        minute = end,
-                        use24Hour = use24Hour,
-                        label = "To",
-                        onChange = { end = it.coerceAtLeast(start + 5) },
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Kind") {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    TimetableKind.entries.forEach { option ->
-                        FilterChip(
-                            selected = kind == option,
-                            onClick = { kind = option },
-                            label = { Text(option.label) },
-                            shape = MaterialTheme.shapes.small,
-                            colors = FilterChipDefaults.filterChipColors(
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            ),
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Subject") {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    FilterChip(
-                        selected = subjectCode == null,
-                        onClick = { subjectCode = null },
-                        label = { Text("None") },
-                        shape = MaterialTheme.shapes.small,
-                        colors = FilterChipDefaults.filterChipColors(
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ),
-                    )
-                    subjects.forEach { subject ->
-                        FilterChip(
-                            selected = subjectCode == subject.code,
-                            onClick = { subjectCode = subject.code },
-                            label = { Text(subject.code) },
-                            shape = MaterialTheme.shapes.small,
-                            colors = FilterChipDefaults.filterChipColors(
-                                labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            ),
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Faculty") {
-                MarginTextField(
-                    value = faculty,
-                    onValueChange = { faculty = it },
-                    placeholder = "Optional",
+        if (subjects.isNotEmpty()) {
+            GroupedSection(header = "Subject") {
+                OptionChips(
+                    options = listOf<String?>(null) + subjects.map { it.code },
+                    selected = subjectCode,
+                    label = { it ?: "None" },
+                    onSelect = { subjectCode = it },
                 )
-            }
-
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Room") {
-                MarginTextField(
-                    value = location,
-                    onValueChange = { location = it },
-                    placeholder = "Optional",
-                )
-            }
-
-            if (onCancelToday != null) {
-                Spacer(Modifier.height(Space.l))
-                TextButton(onClick = onCancelToday) { Text("Cancel just for today") }
-            }
-
-            Spacer(Modifier.height(Space.xl))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Space.s),
-            ) {
-                if (onDelete != null) {
-                    TextButton(onClick = onDelete) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-                Button(
-                    onClick = {
-                        val base = entry ?: TimetableEntry(
-                            dayOfWeek = selectedDay,
-                            start = start,
-                            end = end,
-                            subjectCode = subjectCode,
-                            title = title,
-                            kind = kind,
-                        )
-                        onSave(
-                            base.copy(
-                                dayOfWeek = selectedDay,
-                                start = start,
-                                end = end,
-                                subjectCode = subjectCode,
-                                title = title.trim().ifBlank { subjectCode ?: "Class" },
-                                kind = kind,
-                                faculty = faculty.trim().ifBlank { null },
-                                location = location.trim().ifBlank { null },
-                            ),
-                        )
-                    },
-                    shape = MaterialTheme.shapes.small,
-                    enabled = end > start,
-                ) { Text("Save") }
             }
         }
+
+        if (onCancelToday != null) {
+            GroupedSection(
+                modifier = Modifier.padding(top = Space.xl),
+                footer = "Only today changes. Next week the class is back as usual.",
+            ) {
+                GroupedRow(title = "Cancel Just for Today", titleColor = colors.tint, onClick = onCancelToday)
+            }
+        }
+
+        if (onDelete != null) {
+            GroupedSection(modifier = Modifier.padding(top = Space.xl)) {
+                GroupedRow(
+                    title = "Delete Class",
+                    titleColor = colors.destructive,
+                    onClick = { confirmingDelete = true },
+                )
+            }
+        }
+    }
+
+    if (confirmingDelete && onDelete != null) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("Delete this class?", style = AppleType.headline) },
+            text = {
+                Text(
+                    "It comes off every week. To skip it once, cancel it just for today instead.",
+                    style = AppleType.subheadline,
+                    color = colors.secondaryLabel,
+                )
+            },
+            confirmButton = {
+                TextAction(text = "Delete", emphasized = true, color = colors.destructive, onClick = {
+                    confirmingDelete = false
+                    onDelete()
+                })
+            },
+            dismissButton = { TextAction(text = "Cancel", onClick = { confirmingDelete = false }) },
+            containerColor = colors.surface,
+            shape = MarginShape.card,
+        )
     }
 }

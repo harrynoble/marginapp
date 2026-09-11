@@ -1,123 +1,124 @@
 package com.margin.app.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.LineHeightStyle
-import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.margin.app.R
+import kotlin.math.exp
 
 /*
- * The platform sans at deliberate sizes. No custom font: a productivity app is read, not
- * admired, and the system face already renders at every density the user might have.
- * Weight carries hierarchy so that colour can stay quiet.
+ * Apple's type scale, set in Inter.
+ *
+ * SF Pro is licensed for Apple platforms only and cannot ship in an Android app. Inter is the
+ * open face closest to it in proportion and rhythm, and, like SF, it has an optical-size axis:
+ * text sizes use the 14pt cut, which is wider with more open spacing, and titles use the 32pt
+ * "Display" cut, which is tighter and sharper. That split is most of why SF looks like SF.
+ *
+ * Sizes are Apple's Dynamic Type defaults (Large), in sp so they follow the user font size.
  */
 
-private val Sans = FontFamily.SansSerif
-
-private val TightLineHeight = LineHeightStyle(
-    alignment = LineHeightStyle.Alignment.Center,
-    trim = LineHeightStyle.Trim.None,
+@OptIn(ExperimentalTextApi::class)
+private fun inter(weight: FontWeight, opticalSize: Float) = Font(
+    resId = R.font.inter_variable,
+    weight = weight,
+    variationSettings = FontVariation.Settings(
+        FontVariation.weight(weight.weight),
+        FontVariation.Setting("opsz", opticalSize),
+    ),
 )
 
+/** Inter at text optical size, for everything below 20sp. */
+val InterText = FontFamily(
+    inter(FontWeight.Normal, 14f),
+    inter(FontWeight.Medium, 14f),
+    inter(FontWeight.SemiBold, 14f),
+    inter(FontWeight.Bold, 14f),
+)
+
+/** Inter Display, for titles and large numerals. */
+val InterDisplay = FontFamily(
+    inter(FontWeight.Normal, 32f),
+    inter(FontWeight.Medium, 32f),
+    inter(FontWeight.SemiBold, 32f),
+    inter(FontWeight.Bold, 32f),
+    inter(FontWeight.ExtraBold, 32f),
+)
+
+/**
+ * Inter's published dynamic-metrics curve: tighter tracking as size grows, which is what keeps
+ * large titles from looking loose. Display sizes use a gentler version of it because the
+ * display cut is already tighter by design.
+ */
+private fun tracking(size: Float, display: Boolean): TextUnit {
+    val em = -0.0223f + 0.185f * exp(-0.1745f * size)
+    return (em * size * if (display) 0.7f else 1f).sp
+}
+
+private fun display(size: Float, lineHeight: Float, weight: FontWeight) = TextStyle(
+    fontFamily = InterDisplay,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking(size, display = true),
+)
+
+private fun text(size: Float, lineHeight: Float, weight: FontWeight) = TextStyle(
+    fontFamily = InterText,
+    fontWeight = weight,
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking(size, display = false),
+)
+
+/** Apple's named text styles. Screens use these names directly so intent is obvious. */
+object AppleType {
+    val largeTitle = display(34f, 41f, FontWeight.Bold)
+    val title1 = display(28f, 34f, FontWeight.Bold)
+    val title2 = display(22f, 28f, FontWeight.Bold)
+    val title3 = display(20f, 25f, FontWeight.SemiBold)
+    val headline = text(17f, 22f, FontWeight.SemiBold)
+    val body = text(17f, 22f, FontWeight.Normal)
+    val callout = text(16f, 21f, FontWeight.Normal)
+    val subheadline = text(15f, 20f, FontWeight.Normal)
+    val subheadlineEmphasized = text(15f, 20f, FontWeight.SemiBold)
+    val footnote = text(13f, 18f, FontWeight.Normal)
+    val footnoteEmphasized = text(13f, 18f, FontWeight.SemiBold)
+    val caption1 = text(12f, 16f, FontWeight.Normal)
+    val caption2 = text(11f, 13f, FontWeight.Medium)
+
+    /** Tab bar labels, which Apple sets at 10pt medium. */
+    val tabLabel = text(10f, 12f, FontWeight.SemiBold)
+
+    /** Times and counts, with tabular figures so columns of numbers line up. */
+    val timeGutter = text(15f, 20f, FontWeight.Medium).copy(fontFeatureSettings = "tnum")
+    val numeral = display(34f, 40f, FontWeight.Bold).copy(fontFeatureSettings = "tnum")
+    val timer = display(64f, 70f, FontWeight.SemiBold).copy(
+        fontFeatureSettings = "tnum",
+        letterSpacing = (-1.5).sp,
+    )
+}
+
+/** Material components (dialogs, pickers) read these, so even they speak the same type. */
 val MarginTypography = Typography(
-    displaySmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
-        letterSpacing = (-0.5).sp,
-        lineHeightStyle = TightLineHeight,
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-        letterSpacing = (-0.3).sp,
-    ),
-    headlineSmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = (-0.2).sp,
-    ),
-    titleLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
-        letterSpacing = (-0.1).sp,
-    ),
-    titleMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 16.sp,
-        lineHeight = 22.sp,
-    ),
-    titleSmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-    ),
-    bodyLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-    ),
-    bodyMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Normal,
-        fontSize = 15.sp,
-        lineHeight = 21.sp,
-    ),
-    bodySmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Normal,
-        fontSize = 13.sp,
-        lineHeight = 18.sp,
-    ),
-    labelLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 18.sp,
-        letterSpacing = 0.1.sp,
-    ),
-    labelMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 13.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.1.sp,
-    ),
-    labelSmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 0.4.sp,
-    ),
-)
-
-/** Times in the timeline gutter, so that 9:15 and 12:50 occupy the same width. */
-val TimeGutterStyle = TextStyle(
-    fontFamily = Sans,
-    fontWeight = FontWeight.Medium,
-    fontSize = 13.sp,
-    lineHeight = 16.sp,
-    letterSpacing = 0.em,
-)
-
-/** Section headers: small, quiet, and consistent everywhere. */
-val SectionLabelStyle = TextStyle(
-    fontFamily = Sans,
-    fontWeight = FontWeight.Medium,
-    fontSize = 12.sp,
-    lineHeight = 16.sp,
-    letterSpacing = 0.6.sp,
+    displayLarge = AppleType.timer,
+    displayMedium = AppleType.largeTitle,
+    displaySmall = AppleType.largeTitle,
+    headlineLarge = AppleType.largeTitle,
+    headlineMedium = AppleType.title1,
+    headlineSmall = AppleType.title2,
+    titleLarge = AppleType.title3,
+    titleMedium = AppleType.headline,
+    titleSmall = AppleType.subheadlineEmphasized,
+    bodyLarge = AppleType.body,
+    bodyMedium = AppleType.subheadline,
+    bodySmall = AppleType.footnote,
+    labelLarge = AppleType.subheadlineEmphasized,
+    labelMedium = AppleType.footnoteEmphasized,
+    labelSmall = AppleType.caption2,
 )

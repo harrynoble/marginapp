@@ -1,41 +1,35 @@
 package com.margin.app.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.DirectionsWalk
-import androidx.compose.material.icons.automirrored.outlined.MenuBook
-import androidx.compose.material.icons.outlined.Bedtime
-import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.Coffee
-import androidx.compose.material.icons.outlined.Event
-import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.Repeat
-import androidx.compose.material.icons.outlined.Restaurant
-import androidx.compose.material.icons.outlined.School
-import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material.icons.outlined.SelfImprovement
-import androidx.compose.material.icons.outlined.TaskAlt
-import androidx.compose.material.icons.outlined.Weekend
+import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Construction
+import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Restaurant
+import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.SelfImprovement
+import androidx.compose.material.icons.rounded.TaskAlt
+import androidx.compose.material.icons.rounded.Weekend
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,24 +38,26 @@ import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.ui.theme.AppleType
+import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.Space
-import com.margin.app.ui.theme.TimeGutterStyle
 import com.margin.app.ui.theme.railFor
+import com.margin.app.ui.today.TimelineItem
 
 fun iconFor(type: BlockType): ImageVector = when (type) {
-    BlockType.CLASS -> Icons.Outlined.School
-    BlockType.TASK -> Icons.Outlined.TaskAlt
-    BlockType.REVIEW -> Icons.AutoMirrored.Outlined.MenuBook
-    BlockType.BUILD -> Icons.Outlined.Build
-    BlockType.BREAK -> Icons.Outlined.Coffee
-    BlockType.MEAL -> Icons.Outlined.Restaurant
-    BlockType.COMMUTE -> Icons.AutoMirrored.Outlined.DirectionsWalk
-    BlockType.DECOMPRESS -> Icons.Outlined.SelfImprovement
-    BlockType.LEISURE -> Icons.Outlined.Weekend
-    BlockType.EVENT -> Icons.Outlined.Event
-    BlockType.ROUTINE -> Icons.Outlined.Repeat
-    BlockType.SLEEP -> Icons.Outlined.Bedtime
-    BlockType.FREE -> Icons.Outlined.Schedule
+    BlockType.CLASS -> Icons.Rounded.School
+    BlockType.TASK -> Icons.Rounded.TaskAlt
+    BlockType.REVIEW -> Icons.AutoMirrored.Rounded.MenuBook
+    BlockType.BUILD -> Icons.Rounded.Construction
+    BlockType.BREAK -> Icons.Rounded.Coffee
+    BlockType.MEAL -> Icons.Rounded.Restaurant
+    BlockType.COMMUTE -> Icons.AutoMirrored.Rounded.DirectionsWalk
+    BlockType.DECOMPRESS -> Icons.Rounded.SelfImprovement
+    BlockType.LEISURE -> Icons.Rounded.Weekend
+    BlockType.EVENT -> Icons.Rounded.Event
+    BlockType.ROUTINE -> Icons.Rounded.Repeat
+    BlockType.SLEEP -> Icons.Rounded.Bedtime
+    BlockType.FREE -> Icons.Rounded.Schedule
 }
 
 fun labelFor(type: BlockType): String = when (type) {
@@ -81,122 +77,155 @@ fun labelFor(type: BlockType): String = when (type) {
 }
 
 /**
- * One line of the day. The time sits in a fixed-width gutter so every start time lines up in
- * a column, which is what makes a long day scannable without reading a single word.
+ * One line of the day, calendar style: start time in a fixed tabular column, a capsule of the
+ * category colour, then the title. The time column is what makes a long day scannable.
  */
 @Composable
-fun BlockRow(
+fun TimelineRow(
     block: ScheduleBlock,
     use24Hour: Boolean,
     modifier: Modifier = Modifier,
     isNow: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
+    val colors = MarginTheme.colors
     val done = block.status == BlockStatus.DONE
     val skipped = block.status == BlockStatus.SKIPPED
-    val dim = done || skipped || block.type == BlockType.SLEEP
-    val rail = railFor(block.type, block.category)
+    val quiet = block.type == BlockType.FREE || block.type == BlockType.SLEEP
 
-    val titleColor = when {
-        skipped -> MaterialTheme.colorScheme.onSurfaceVariant
-        dim -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.onSurface
+    TimelineLine(
+        time = MarginTime.formatTime(block.start, use24Hour),
+        title = block.title,
+        subtitle = buildList {
+            if (block.type != BlockType.FREE) add(labelFor(block.type))
+            block.subtitle?.let { add(it) }
+            if (skipped) add("Skipped")
+        }.joinToString(" · ").ifBlank { null },
+        duration = MarginTime.formatDurationShort(block.duration),
+        rail = if (done || skipped) colors.quaternaryLabel else railFor(block.type, block.category),
+        titleColor = when {
+            skipped || quiet -> colors.secondaryLabel
+            done -> colors.secondaryLabel
+            else -> colors.label
+        },
+        strike = skipped,
+        isNow = isNow,
+        trailingIcon = when {
+            done -> Icons.Rounded.CheckCircle
+            block.locked -> Icons.Rounded.Lock
+            else -> null
+        },
+        modifier = modifier,
+        onClick = onClick,
+    )
+}
+
+/**
+ * College, folded into one line. The person knows their timetable; the timeline only needs
+ * to say they are at college, until when, and what is happening if it is happening now.
+ */
+@Composable
+fun CollegeRow(
+    college: TimelineItem.College,
+    use24Hour: Boolean,
+    nowMinute: Int,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    val colors = MarginTheme.colors
+    val isNow = nowMinute in college.start until college.end
+    val period = if (isNow) college.periodAt(nowMinute) else null
+    val subtitle = when {
+        period != null -> "Now: " + period.title
+        else -> {
+            val count = college.classCount
+            "$count ${if (count == 1) "class" else "classes"} · until " +
+                MarginTime.formatTime(college.end, use24Hour)
+        }
     }
+    TimelineLine(
+        time = MarginTime.formatTime(college.start, use24Hour),
+        title = "College",
+        subtitle = subtitle,
+        duration = MarginTime.formatDurationShort(college.end - college.start),
+        rail = railFor(BlockType.CLASS, com.margin.app.domain.model.Category.ACADEMICS),
+        titleColor = if (nowMinute >= college.end) colors.secondaryLabel else colors.label,
+        strike = false,
+        isNow = isNow,
+        trailingIcon = null,
+        modifier = modifier,
+        onClick = onClick,
+    )
+}
 
+@Composable
+private fun TimelineLine(
+    time: String,
+    title: String,
+    subtitle: String?,
+    duration: String,
+    rail: androidx.compose.ui.graphics.Color,
+    titleColor: androidx.compose.ui.graphics.Color,
+    strike: Boolean,
+    isNow: Boolean,
+    trailingIcon: ImageVector?,
+    modifier: Modifier,
+    onClick: (() -> Unit)?,
+) {
+    val colors = MarginTheme.colors
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.small)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .then(
-                if (isNow) {
-                    Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                } else {
-                    Modifier
-                },
-            )
-            .padding(vertical = Space.s, horizontal = if (isNow) Space.s else 0.dp),
-        verticalAlignment = Alignment.Top,
+            .heightIn(min = 60.dp)
+            .padding(horizontal = Space.l, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = MarginTime.formatTime(block.start, use24Hour),
-            style = TimeGutterStyle,
-            color = if (isNow) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier
-                .width(if (use24Hour) 46.dp else 66.dp)
-                .padding(top = 2.dp),
+            text = time,
+            style = AppleType.timeGutter,
+            color = if (isNow) colors.tint else colors.secondaryLabel,
+            modifier = Modifier.width(76.dp),
+            maxLines = 1,
         )
-
-        Box(
-            modifier = Modifier
-                .padding(end = Space.m, top = 3.dp)
-                .width(3.dp)
-                .heightIn(min = 18.dp)
-                .height(if (block.subtitle != null) 34.dp else 18.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(if (dim) MaterialTheme.colorScheme.outlineVariant else rail),
-        )
-
+        CategoryRail(color = rail)
+        Spacer(Modifier.width(Space.m))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = block.title,
-                style = MaterialTheme.typography.bodyLarge,
+                text = title,
+                style = AppleType.body.copy(
+                    fontWeight = if (isNow) androidx.compose.ui.text.font.FontWeight.SemiBold else null,
+                ),
                 color = titleColor,
-                textDecoration = if (skipped) TextDecoration.LineThrough else null,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val meta = buildList {
-                add(labelFor(block.type))
-                block.subtitle?.let { add(it) }
-                if (skipped) add("skipped")
-            }.joinToString(" · ")
-            Text(
-                text = meta,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textDecoration = if (strike) TextDecoration.LineThrough else null,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-
-        Spacer(Modifier.width(Space.s))
-
-        Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = MarginTime.formatDurationShort(block.duration),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (block.locked) {
-                    Icon(
-                        imageVector = Icons.Outlined.Lock,
-                        contentDescription = "Pinned",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(12.dp),
-                    )
-                }
-                if (done) {
-                    Icon(
-                        imageVector = Icons.Outlined.TaskAlt,
-                        contentDescription = "Done",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(13.dp),
-                    )
-                }
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = AppleType.footnote,
+                    color = colors.secondaryLabel,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
+        Spacer(Modifier.width(Space.s))
+        if (trailingIcon != null) {
+            Icon(
+                imageVector = trailingIcon,
+                contentDescription = null,
+                tint = if (trailingIcon == Icons.Rounded.CheckCircle) colors.positive else colors.tertiaryLabel,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            text = duration,
+            style = AppleType.subheadline.copy(fontFeatureSettings = "tnum"),
+            color = colors.secondaryLabel,
+            maxLines = 1,
+        )
     }
 }

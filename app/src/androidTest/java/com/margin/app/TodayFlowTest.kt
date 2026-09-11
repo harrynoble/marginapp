@@ -1,21 +1,25 @@
 package com.margin.app
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToKeyAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The flows that matter most: the app opens on a real plan, the seeded week is already
- * there, and every tab reaches a screen that has rendered rather than an empty frame.
+ * The flows that matter most: the app opens on a real plan, the seeded timetable is already
+ * there without being asked for, and every tab reaches a screen that has rendered rather than
+ * an empty frame.
  *
- * Assertions use ignoreCase because section headers are uppercased for display, and they
- * match on content the screens genuinely own rather than on chrome shared between tabs.
+ * The timetable is no longer a tab. It lives under Settings, so the test goes there the way a
+ * person would.
  */
 @RunWith(AndroidJUnit4::class)
 class TodayFlowTest {
@@ -24,11 +28,7 @@ class TodayFlowTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     private fun awaitText(text: String, timeoutMillis: Long = 15_000) {
-        composeRule.waitUntil(timeoutMillis) {
-            composeRule.onAllNodesWithText(text, substring = true, ignoreCase = true)
-                .fetchSemanticsNodes()
-                .isNotEmpty()
-        }
+        composeRule.waitUntil(timeoutMillis) { exists(text) }
     }
 
     private fun exists(text: String): Boolean =
@@ -36,16 +36,21 @@ class TodayFlowTest {
             .fetchSemanticsNodes()
             .isNotEmpty()
 
+    private fun describedExists(description: String): Boolean =
+        composeRule.onAllNodesWithContentDescription(description)
+            .fetchSemanticsNodes()
+            .isNotEmpty()
+
     private fun openTab(label: String) {
-        composeRule.onAllNodesWithText(label, ignoreCase = true).onFirst().performClick()
+        composeRule.onAllNodesWithText(label).onFirst().performClick()
         composeRule.waitForIdle()
     }
 
     /** Setup only appears on a fresh install, so both paths have to be handled. */
     private fun skipOnboardingIfShown() {
         composeRule.waitForIdle()
-        if (exists("Skip setup")) {
-            composeRule.onAllNodesWithText("Skip setup", ignoreCase = true).onFirst().performClick()
+        if (exists("Set Up Later")) {
+            composeRule.onAllNodesWithText("Set Up Later").onFirst().performClick()
             composeRule.waitForIdle()
         }
     }
@@ -54,30 +59,28 @@ class TodayFlowTest {
     fun todayScreenAnswersWhatIsHappeningNow() {
         skipOnboardingIfShown()
 
-        // The Now card renders in one of two forms: something is scheduled, or the day is
-        // open. Either proves the plan was generated and the screen composed.
+        // The Now card always renders in one of these forms, whatever the time of day.
         composeRule.waitUntil(15_000) {
-            exists("Now") || exists("Ahead") || exists("In progress")
+            exists("Now") || exists("Ahead") || exists("In progress") || exists("At college")
         }
-        composeRule.onAllNodesWithText("Now", substring = true, ignoreCase = true)
-            .fetchSemanticsNodes()
-            .let { nodes ->
-                if (nodes.isEmpty()) {
-                    composeRule.onAllNodesWithText("Ahead", substring = true, ignoreCase = true)
-                        .onFirst()
-                        .assertIsDisplayed()
-                }
-            }
+        composeRule.onAllNodesWithText("Today").onFirst().assertIsDisplayed()
     }
 
     @Test
     fun theSeededTimetableIsAlreadyThere() {
         skipOnboardingIfShown()
-        openTab("Week")
+        composeRule.waitUntil(15_000) { describedExists("Settings") }
+        composeRule.onAllNodesWithContentDescription("Settings").onFirst().performClick()
+        composeRule.waitForIdle()
 
-        // The subject list is unique to this screen and comes straight from the seed.
-        awaitText("Review weight")
-        composeRule.onAllNodesWithText("Review weight", substring = true, ignoreCase = true)
+        composeRule.onNode(hasScrollToKeyAction()).performScrollToKey("college")
+        composeRule.onAllNodesWithText("Timetable").onFirst().performClick()
+        composeRule.waitForIdle()
+
+        // The subject list comes straight from the seed; nothing was entered by hand.
+        composeRule.onNode(hasScrollToKeyAction()).performScrollToKey("subjects")
+        awaitText("Revision weight")
+        composeRule.onAllNodesWithText("Revision weight", substring = true)
             .onFirst()
             .assertIsDisplayed()
     }
@@ -87,10 +90,8 @@ class TodayFlowTest {
         skipOnboardingIfShown()
         openTab("Tasks")
 
-        awaitText("Projects")
-        composeRule.onAllNodesWithText("Projects", substring = true, ignoreCase = true)
-            .onFirst()
-            .assertIsDisplayed()
+        awaitText("Show Done")
+        composeRule.onAllNodesWithText("Show Done").onFirst().assertIsDisplayed()
     }
 
     @Test
@@ -98,10 +99,8 @@ class TodayFlowTest {
         skipOnboardingIfShown()
         openTab("Plan")
 
-        awaitText("college")
-        composeRule.onAllNodesWithText("college", substring = true, ignoreCase = true)
-            .onFirst()
-            .assertIsDisplayed()
+        composeRule.waitUntil(15_000) { describedExists("Previous week") }
+        composeRule.onAllNodesWithContentDescription("Previous week").onFirst().assertIsDisplayed()
     }
 
     @Test

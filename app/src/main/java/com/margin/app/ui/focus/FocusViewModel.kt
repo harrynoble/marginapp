@@ -35,6 +35,8 @@ data class FocusUiState(
     val links: List<ResourceLink> = emptyList(),
     val use24Hour: Boolean = false,
     val nowMinute: Int = 0,
+    /** Seconds since midnight, so the focus timer can count down to the second. */
+    val nowSecond: Int = 0,
     val finished: Boolean = false,
 ) {
     val running: Boolean get() = block?.status == BlockStatus.ACTIVE
@@ -65,7 +67,7 @@ class FocusViewModel(
     private val clock: Flow<LocalDateTime> = flow {
         while (true) {
             emit(LocalDateTime.now())
-            delay(10_000L)
+            delay(1_000L)
         }
     }
 
@@ -95,6 +97,7 @@ class FocusViewModel(
             links = links,
             use24Hour = prefs.use24HourTime,
             nowMinute = MarginTime.nowMinute(now),
+            nowSecond = now.toLocalTime().toSecondOfDay(),
             finished = isFinished || block == null,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FocusUiState())

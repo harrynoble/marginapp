@@ -1,33 +1,41 @@
 package com.margin.app.ui.settings
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.Alarm
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.Construction
+import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.DirectionsBus
+import androidx.compose.material.icons.rounded.FreeBreakfast
+import androidx.compose.material.icons.rounded.Handyman
+import androidx.compose.material.icons.rounded.HourglassTop
+import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.SelfImprovement
+import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Timelapse
+import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.WbSunny
+import androidx.compose.material.icons.rounded.WbTwilight
+import androidx.compose.material.icons.rounded.Weekend
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,567 +43,518 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.margin.app.core.MarginTime
 import com.margin.app.data.prefs.AiProviderId
-import com.margin.app.ui.components.LabeledField
-import com.margin.app.ui.components.MarginCard
-import com.margin.app.ui.components.MarginTextField
-import com.margin.app.ui.components.SectionHeader
-import com.margin.app.ui.components.StepperRow
-import com.margin.app.ui.components.TimeField
+import com.margin.app.data.prefs.UserPreferences
+import com.margin.app.ui.components.DurationRow
+import com.margin.app.ui.components.FormTextField
+import com.margin.app.ui.components.GroupedRow
+import com.margin.app.ui.components.GroupedSection
+import com.margin.app.ui.components.IconTile
+import com.margin.app.ui.components.IosSwitch
+import com.margin.app.ui.components.LargeTitleScreen
+import com.margin.app.ui.components.OptionChips
+import com.margin.app.ui.components.RowSeparator
+import com.margin.app.ui.components.TextAction
+import com.margin.app.ui.components.TimeRow
+import com.margin.app.ui.glass.GlassCircleButton
+import com.margin.app.ui.glass.rememberGlassBackdrop
+import com.margin.app.ui.theme.AppleType
+import com.margin.app.ui.theme.MarginShape
+import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.Space
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+/** Separators start where row titles do, past the icon tile. */
+private val IconInset = Space.l + 30.dp + Space.m
+
+private enum class Confirm(val title: String, val body: String, val action: String) {
+    RESTORE_TIMETABLE(
+        title = "Restore the original timetable?",
+        body = "Any classes you edited go back to how they shipped, and today is rebuilt.",
+        action = "Restore",
+    ),
+    CLEAR_HISTORY(
+        title = "Delete schedule history?",
+        body = "Past and planned days are cleared and today is rebuilt. Tasks, the timetable and " +
+            "your settings stay.",
+        action = "Delete",
+    ),
+}
+
+/**
+ * iOS Settings: inset grouped sections, a coloured tile on every row, values on the right and
+ * a sentence under each group saying what it changes. Every edit replans today straight away.
+ */
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onBack: () -> Unit,
+    onOpenTimetable: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val prefs = state.prefs
+    val colors = MarginTheme.colors
+    val accents = MarginTheme.accents
+    val backdrop = rememberGlassBackdrop()
+    val context = LocalContext.current
+    var confirm by remember { mutableStateOf<Confirm?>(null) }
 
-    Scaffold(
+    val set: ((UserPreferences) -> UserPreferences) -> Unit = { transform -> viewModel.update(transform) }
+    val use24 = prefs.use24HourTime
+
+    LargeTitleScreen(
+        title = "Settings",
+        backdrop = backdrop,
+        bottomClearance = Space.xxxl,
         modifier = modifier,
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", style = MaterialTheme.typography.titleLarge) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
+        navigation = {
+            GlassCircleButton(
+                backdrop = backdrop,
+                icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                contentDescription = "Back",
+                onClick = onBack,
+                iconSize = 30.dp,
             )
         },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(
-                start = Space.gutter,
-                end = Space.gutter,
-                bottom = Space.xxxl * 2,
-            ),
-            verticalArrangement = Arrangement.spacedBy(Space.m),
-        ) {
-            state.message?.let { message ->
-                item(key = "message") {
-                    MarginCard(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        border = false,
-                        onClick = viewModel::dismissMessage,
-                    ) {
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                    }
-                }
-            }
-
-            item(key = "day") {
-                MarginCard {
-                    SectionHeader("Your day")
-                    Spacer(Modifier.height(Space.m))
-                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                        TimeField(
-                            minute = prefs.wakeMinute,
-                            use24Hour = prefs.use24HourTime,
-                            label = "Wake",
-                            onChange = { minute -> viewModel.update { it.copy(wakeMinute = minute) } },
-                        )
-                        TimeField(
-                            minute = prefs.sleepMinute,
-                            use24Hour = prefs.use24HourTime,
-                            label = "Sleep",
-                            onChange = { minute -> viewModel.update { it.copy(sleepMinute = minute) } },
-                        )
-                    }
-                    Spacer(Modifier.height(Space.s))
-                    ToggleRow(
-                        label = "24 hour clock",
-                        checked = prefs.use24HourTime,
-                        onChange = { value -> viewModel.update { it.copy(use24HourTime = value) } },
-                    )
-                }
-            }
-
-            item(key = "transitions") {
-                MarginCard {
-                    SectionHeader("Transitions")
-                    Spacer(Modifier.height(Space.s))
-                    Text(
-                        text = "Time reserved around commitments, so the plan is not back to back.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(Space.s))
-                    StepperRow(
-                        label = "Travel home after college",
-                        value = MarginTime.formatDuration(prefs.commuteMinutes),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(commuteMinutes = (it.commuteMinutes - 5).coerceAtLeast(0))
-                            }
+    ) {
+        state.message?.let { message ->
+            item(key = "message") {
+                GroupedSection(modifier = Modifier.padding(top = Space.s)) {
+                    GroupedRow(
+                        title = message,
+                        leading = {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                tint = colors.positive,
+                                modifier = Modifier.size(24.dp),
+                            )
                         },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(commuteMinutes = (it.commuteMinutes + 5).coerceAtMost(180))
-                            }
-                        },
-                    )
-                    StepperRow(
-                        label = "Settle in before work",
-                        value = MarginTime.formatDuration(prefs.decompressionMinutes),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    decompressionMinutes = (it.decompressionMinutes - 5)
-                                        .coerceAtLeast(0),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    decompressionMinutes = (it.decompressionMinutes + 5)
-                                        .coerceAtMost(120),
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-
-            item(key = "work") {
-                MarginCard {
-                    SectionHeader("Work and breaks")
-                    Spacer(Modifier.height(Space.s))
-                    StepperRow(
-                        label = "Daily work ceiling",
-                        value = MarginTime.formatDuration(prefs.maxWorkMinutesPerDay),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    maxWorkMinutesPerDay = (it.maxWorkMinutesPerDay - 15)
-                                        .coerceAtLeast(30),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    maxWorkMinutesPerDay = (it.maxWorkMinutesPerDay + 15)
-                                        .coerceAtMost(12 * 60),
-                                )
-                            }
-                        },
-                    )
-                    StepperRow(
-                        label = "Break after working",
-                        value = MarginTime.formatDuration(prefs.continuousWorkBeforeBreak),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    continuousWorkBeforeBreak = (it.continuousWorkBeforeBreak - 5)
-                                        .coerceAtLeast(20),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    continuousWorkBeforeBreak = (it.continuousWorkBeforeBreak + 5)
-                                        .coerceAtMost(180),
-                                )
-                            }
-                        },
-                    )
-                    StepperRow(
-                        label = "Break length",
-                        value = MarginTime.formatDuration(prefs.shortBreakMinutes),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    shortBreakMinutes = (it.shortBreakMinutes - 5).coerceAtLeast(5),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    shortBreakMinutes = (it.shortBreakMinutes + 5).coerceAtMost(60),
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-
-            item(key = "protected") {
-                MarginCard {
-                    SectionHeader("Protected time")
-                    Spacer(Modifier.height(Space.s))
-                    Text(
-                        text = "These are floors. The planner reserves them before it places any work.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(Space.s))
-                    StepperRow(
-                        label = "Leisure every day",
-                        value = MarginTime.formatDuration(prefs.minLeisureMinutes),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    minLeisureMinutes = (it.minLeisureMinutes - 15).coerceAtLeast(0),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    minLeisureMinutes = (it.minLeisureMinutes + 15)
-                                        .coerceAtMost(8 * 60),
-                                )
-                            }
-                        },
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                        TimeField(
-                            minute = prefs.leisureWindowStart,
-                            use24Hour = prefs.use24HourTime,
-                            label = "From",
-                            onChange = { m -> viewModel.update { it.copy(leisureWindowStart = m) } },
-                        )
-                        TimeField(
-                            minute = prefs.leisureWindowEnd,
-                            use24Hour = prefs.use24HourTime,
-                            label = "To",
-                            onChange = { m -> viewModel.update { it.copy(leisureWindowEnd = m) } },
-                        )
-                    }
-                    Spacer(Modifier.height(Space.m))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(Modifier.height(Space.s))
-                    StepperRow(
-                        label = "Build time on weekdays",
-                        value = MarginTime.formatDuration(prefs.buildMinutesWeekday),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    buildMinutesWeekday = (it.buildMinutesWeekday - 15)
-                                        .coerceAtLeast(0),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    buildMinutesWeekday = (it.buildMinutesWeekday + 15)
-                                        .coerceAtMost(6 * 60),
-                                )
-                            }
-                        },
-                    )
-                    StepperRow(
-                        label = "Build time at weekends",
-                        value = MarginTime.formatDuration(prefs.buildMinutesWeekend),
-                        onDecrease = {
-                            viewModel.update {
-                                it.copy(
-                                    buildMinutesWeekend = (it.buildMinutesWeekend - 15)
-                                        .coerceAtLeast(0),
-                                )
-                            }
-                        },
-                        onIncrease = {
-                            viewModel.update {
-                                it.copy(
-                                    buildMinutesWeekend = (it.buildMinutesWeekend + 15)
-                                        .coerceAtMost(8 * 60),
-                                )
-                            }
-                        },
-                    )
-                }
-            }
-
-            item(key = "review") {
-                MarginCard {
-                    SectionHeader("Post-class review")
-                    Spacer(Modifier.height(Space.s))
-                    ToggleRow(
-                        label = "Suggest revision for the classes you had",
-                        checked = prefs.reviewEnabled,
-                        onChange = { value -> viewModel.update { it.copy(reviewEnabled = value) } },
-                    )
-                    if (prefs.reviewEnabled) {
-                        StepperRow(
-                            label = "Per teaching hour",
-                            value = MarginTime.formatDuration(prefs.reviewMinutesPerTeachingHour),
-                            onDecrease = {
-                                viewModel.update {
-                                    it.copy(
-                                        reviewMinutesPerTeachingHour =
-                                        (it.reviewMinutesPerTeachingHour - 5).coerceAtLeast(5),
-                                    )
-                                }
-                            },
-                            onIncrease = {
-                                viewModel.update {
-                                    it.copy(
-                                        reviewMinutesPerTeachingHour =
-                                        (it.reviewMinutesPerTeachingHour + 5).coerceAtMost(60),
-                                    )
-                                }
-                            },
-                        )
-                        StepperRow(
-                            label = "Cap per day",
-                            value = MarginTime.formatDuration(prefs.maxReviewMinutesPerDay),
-                            onDecrease = {
-                                viewModel.update {
-                                    it.copy(
-                                        maxReviewMinutesPerDay = (it.maxReviewMinutesPerDay - 15)
-                                            .coerceAtLeast(15),
-                                    )
-                                }
-                            },
-                            onIncrease = {
-                                viewModel.update {
-                                    it.copy(
-                                        maxReviewMinutesPerDay = (it.maxReviewMinutesPerDay + 15)
-                                            .coerceAtMost(5 * 60),
-                                    )
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-
-            item(key = "notifications") {
-                MarginCard {
-                    SectionHeader("Notifications")
-                    Spacer(Modifier.height(Space.s))
-                    ToggleRow(
-                        label = "Remind me what is next",
-                        checked = prefs.notificationsEnabled,
-                        onChange = { value ->
-                            viewModel.update { it.copy(notificationsEnabled = value) }
-                        },
-                    )
-                    if (prefs.notificationsEnabled) {
-                        StepperRow(
-                            label = "Lead time",
-                            value = MarginTime.formatDuration(prefs.notifyLeadMinutes),
-                            onDecrease = {
-                                viewModel.update {
-                                    it.copy(notifyLeadMinutes = (it.notifyLeadMinutes - 1).coerceAtLeast(0))
-                                }
-                            },
-                            onIncrease = {
-                                viewModel.update {
-                                    it.copy(notifyLeadMinutes = (it.notifyLeadMinutes + 1).coerceAtMost(60))
-                                }
-                            },
-                        )
-                        ToggleRow(
-                            label = "Tell me when a break is over",
-                            checked = prefs.notifyBreakEnd,
-                            onChange = { value ->
-                                viewModel.update { it.copy(notifyBreakEnd = value) }
-                            },
-                        )
-                        ToggleRow(
-                            label = "Tell me when the plan changes",
-                            checked = prefs.notifyPlanChanges,
-                            onChange = { value ->
-                                viewModel.update { it.copy(notifyPlanChanges = value) }
-                            },
-                        )
-                    }
-                    Spacer(Modifier.height(Space.s))
-                    ToggleRow(
-                        label = "Evening check-in",
-                        checked = prefs.checkInEnabled,
-                        onChange = { value -> viewModel.update { it.copy(checkInEnabled = value) } },
-                    )
-                    if (prefs.checkInEnabled) {
-                        TimeField(
-                            minute = prefs.checkInMinute,
-                            use24Hour = prefs.use24HourTime,
-                            label = "At",
-                            onChange = { m -> viewModel.update { it.copy(checkInMinute = m) } },
-                        )
-                    }
-                }
-            }
-
-            item(key = "ai") {
-                AiSettingsCard(viewModel = viewModel, state = state)
-            }
-
-            item(key = "data") {
-                MarginCard {
-                    SectionHeader("Timetable and data")
-                    Spacer(Modifier.height(Space.s))
-                    Text(
-                        text = "Everything stays on this device. Only the assistant sends anything " +
-                            "out, and only when you type into it.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(Space.s))
-                    TextButton(onClick = viewModel::rebuildToday) { Text("Rebuild today") }
-                    TextButton(onClick = viewModel::restoreSeededTimetable) {
-                        Text("Restore the shipped timetable")
-                    }
-                    TextButton(onClick = viewModel::clearHistory) {
-                        Text("Delete all schedule history", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun AiSettingsCard(viewModel: SettingsViewModel, state: SettingsUiState) {
-    var keyDraft by remember(state.ai.apiKey) { mutableStateOf("") }
-
-    MarginCard {
-        SectionHeader("Assistant")
-        Spacer(Modifier.height(Space.s))
-        Text(
-            text = "Margin plans on its own. The assistant only turns what you type into " +
-                "structured changes, so the app works with this switched off.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(Space.m))
-
-        LabeledField("Provider") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                AiProviderId.entries.forEach { provider ->
-                    FilterChip(
-                        selected = state.ai.provider == provider,
-                        onClick = { viewModel.setProvider(provider) },
-                        label = { Text(provider.label) },
-                        shape = MaterialTheme.shapes.small,
-                        colors = FilterChipDefaults.filterChipColors(
-                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ),
+                        trailing = { TextAction(text = "OK", emphasized = true, onClick = viewModel::dismissMessage) },
                     )
                 }
             }
         }
 
-        if (state.ai.provider != AiProviderId.NONE) {
-            Spacer(Modifier.height(Space.l))
-            LabeledField("Model") {
-                MarginTextField(
-                    value = state.ai.model,
-                    onValueChange = { value -> viewModel.updateAi { it.copy(model = value) } },
-                    placeholder = state.ai.provider.defaultModel,
+        item(key = "day") {
+            GroupedSection(header = "Your day") {
+                TimeRow(
+                    title = "Wake up",
+                    minute = prefs.wakeMinute,
+                    use24Hour = use24,
+                    onChange = { m -> set { it.copy(wakeMinute = m) } },
+                    leading = { IconTile(Icons.Rounded.WbSunny, accents.orange) },
+                )
+                RowSeparator(inset = IconInset)
+                TimeRow(
+                    title = "Bedtime",
+                    minute = prefs.sleepMinute,
+                    use24Hour = use24,
+                    onChange = { m -> set { it.copy(sleepMinute = m) } },
+                    leading = { IconTile(Icons.Rounded.Bedtime, accents.indigo) },
+                )
+                RowSeparator(inset = IconInset)
+                GroupedRow(
+                    title = "24-Hour Time",
+                    leading = { IconTile(Icons.Rounded.Schedule, accents.gray) },
+                    trailing = {
+                        IosSwitch(checked = use24, onCheckedChange = { v -> set { it.copy(use24HourTime = v) } })
+                    },
                 )
             }
+        }
 
-            Spacer(Modifier.height(Space.l))
-            LabeledField("API key") {
-                if (state.ai.apiKey.isBlank()) {
-                    Column {
-                        MarginTextField(
-                            value = keyDraft,
-                            onValueChange = { keyDraft = it },
-                            placeholder = "Paste your key",
-                        )
-                        Spacer(Modifier.height(Space.s))
-                        TextButton(
-                            onClick = {
-                                viewModel.updateAi {
-                                    it.copy(apiKey = keyDraft.trim(), enabled = true)
-                                }
-                                keyDraft = ""
-                            },
-                            enabled = keyDraft.isNotBlank(),
-                        ) { Text("Save key") }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = state.ai.maskedKey,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        TextButton(onClick = viewModel::clearAiKey) {
-                            Text("Remove", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
+        item(key = "transitions") {
+            GroupedSection(
+                header = "Transitions",
+                footer = "Time kept clear around college, so the day is never back to back.",
+            ) {
+                DurationRow(
+                    title = "Travel home",
+                    minutes = prefs.commuteMinutes,
+                    onChange = { m -> set { it.copy(commuteMinutes = m) } },
+                    max = 180,
+                    leading = { IconTile(Icons.Rounded.DirectionsBus, accents.teal) },
+                )
+                RowSeparator(inset = IconInset)
+                DurationRow(
+                    title = "Settle in",
+                    minutes = prefs.decompressionMinutes,
+                    onChange = { m -> set { it.copy(decompressionMinutes = m) } },
+                    max = 120,
+                    leading = { IconTile(Icons.Rounded.SelfImprovement, accents.mint) },
+                )
+            }
+        }
+
+        item(key = "work") {
+            GroupedSection(header = "Work and breaks") {
+                DurationRow(
+                    title = "Daily limit",
+                    minutes = prefs.maxWorkMinutesPerDay,
+                    onChange = { m -> set { it.copy(maxWorkMinutesPerDay = m) } },
+                    step = 15,
+                    min = 30,
+                    max = 12 * 60,
+                    leading = { IconTile(Icons.Rounded.HourglassTop, accents.blue) },
+                )
+                RowSeparator(inset = IconInset)
+                DurationRow(
+                    title = "Break after",
+                    minutes = prefs.continuousWorkBeforeBreak,
+                    onChange = { m -> set { it.copy(continuousWorkBeforeBreak = m) } },
+                    min = 20,
+                    max = 180,
+                    leading = { IconTile(Icons.Rounded.Timer, accents.cyan) },
+                )
+                RowSeparator(inset = IconInset)
+                DurationRow(
+                    title = "Break length",
+                    minutes = prefs.shortBreakMinutes,
+                    onChange = { m -> set { it.copy(shortBreakMinutes = m) } },
+                    min = 5,
+                    max = 60,
+                    leading = { IconTile(Icons.Rounded.Coffee, accents.brown) },
+                )
+            }
+        }
+
+        item(key = "protected") {
+            GroupedSection(
+                header = "Protected time",
+                footer = "These are floors. Work is placed around them, never through them.",
+            ) {
+                DurationRow(
+                    title = "Leisure each day",
+                    minutes = prefs.minLeisureMinutes,
+                    onChange = { m -> set { it.copy(minLeisureMinutes = m) } },
+                    step = 15,
+                    max = 8 * 60,
+                    leading = { IconTile(Icons.Rounded.Weekend, accents.green) },
+                )
+                RowSeparator(inset = IconInset)
+                TimeRow(
+                    title = "Leisure from",
+                    minute = prefs.leisureWindowStart,
+                    use24Hour = use24,
+                    onChange = { m -> set { it.copy(leisureWindowStart = m) } },
+                    leading = { IconTile(Icons.Rounded.WbTwilight, accents.orange) },
+                )
+                RowSeparator(inset = IconInset)
+                TimeRow(
+                    title = "Leisure until",
+                    minute = prefs.leisureWindowEnd,
+                    use24Hour = use24,
+                    onChange = { m -> set { it.copy(leisureWindowEnd = m) } },
+                    leading = { IconTile(Icons.Rounded.NightsStay, accents.indigo) },
+                )
+                RowSeparator(inset = IconInset)
+                DurationRow(
+                    title = "Build on weekdays",
+                    minutes = prefs.buildMinutesWeekday,
+                    onChange = { m -> set { it.copy(buildMinutesWeekday = m) } },
+                    step = 15,
+                    max = 6 * 60,
+                    leading = { IconTile(Icons.Rounded.Construction, accents.orange) },
+                )
+                RowSeparator(inset = IconInset)
+                DurationRow(
+                    title = "Build at weekends",
+                    minutes = prefs.buildMinutesWeekend,
+                    onChange = { m -> set { it.copy(buildMinutesWeekend = m) } },
+                    step = 15,
+                    max = 8 * 60,
+                    leading = { IconTile(Icons.Rounded.Handyman, accents.purple) },
+                )
+            }
+        }
+
+        item(key = "review") {
+            GroupedSection(
+                header = "Revision",
+                footer = "Short reviews after the classes you had, sized by how long each class ran.",
+            ) {
+                GroupedRow(
+                    title = "Suggest revision",
+                    leading = { IconTile(Icons.AutoMirrored.Rounded.MenuBook, accents.indigo) },
+                    trailing = {
+                        IosSwitch(checked = prefs.reviewEnabled, onCheckedChange = { v -> set { it.copy(reviewEnabled = v) } })
+                    },
+                )
+                if (prefs.reviewEnabled) {
+                    RowSeparator(inset = IconInset)
+                    DurationRow(
+                        title = "Per hour of class",
+                        minutes = prefs.reviewMinutesPerTeachingHour,
+                        onChange = { m -> set { it.copy(reviewMinutesPerTeachingHour = m) } },
+                        min = 5,
+                        max = 60,
+                        leading = { IconTile(Icons.Rounded.Timelapse, accents.teal) },
+                    )
+                    RowSeparator(inset = IconInset)
+                    DurationRow(
+                        title = "Most in a day",
+                        minutes = prefs.maxReviewMinutesPerDay,
+                        onChange = { m -> set { it.copy(maxReviewMinutesPerDay = m) } },
+                        step = 15,
+                        min = 15,
+                        max = 5 * 60,
+                        leading = { IconTile(Icons.Rounded.DataUsage, accents.gray) },
+                    )
                 }
             }
-
-            Spacer(Modifier.height(Space.s))
-            ToggleRow(
-                label = "Send the shape of my day for better answers",
-                checked = state.ai.shareScheduleDetail,
-                onChange = { value ->
-                    viewModel.updateAi { it.copy(shareScheduleDetail = value) }
-                },
-            )
-            Text(
-                text = if (state.ai.shareScheduleDetail) {
-                    "Requests include today block titles and times. No history, no notes."
-                } else {
-                    "Requests include only the current time and free windows."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
+
+        item(key = "notifications") {
+            GroupedSection(
+                header = "Notifications",
+                footer = "Classes are never announced. Margin only tells you about your own work, " +
+                    "breaks and changes to the plan.",
+            ) {
+                GroupedRow(
+                    title = "Reminders",
+                    leading = { IconTile(Icons.Rounded.Notifications, accents.red) },
+                    trailing = {
+                        IosSwitch(
+                            checked = prefs.notificationsEnabled,
+                            onCheckedChange = { v -> set { it.copy(notificationsEnabled = v) } },
+                        )
+                    },
+                )
+                if (prefs.notificationsEnabled) {
+                    RowSeparator(inset = IconInset)
+                    DurationRow(
+                        title = "Remind me",
+                        minutes = prefs.notifyLeadMinutes,
+                        onChange = { m -> set { it.copy(notifyLeadMinutes = m) } },
+                        max = 30,
+                        format = { if (it == 0) "At start" else "$it min before" },
+                        leading = { IconTile(Icons.Rounded.Alarm, accents.orange) },
+                    )
+                    RowSeparator(inset = IconInset)
+                    GroupedRow(
+                        title = "When a break ends",
+                        leading = { IconTile(Icons.Rounded.FreeBreakfast, accents.brown) },
+                        trailing = {
+                            IosSwitch(
+                                checked = prefs.notifyBreakEnd,
+                                onCheckedChange = { v -> set { it.copy(notifyBreakEnd = v) } },
+                            )
+                        },
+                    )
+                    RowSeparator(inset = IconInset)
+                    GroupedRow(
+                        title = "When the plan changes",
+                        leading = { IconTile(Icons.Rounded.Sync, accents.blue) },
+                        trailing = {
+                            IosSwitch(
+                                checked = prefs.notifyPlanChanges,
+                                onCheckedChange = { v -> set { it.copy(notifyPlanChanges = v) } },
+                            )
+                        },
+                    )
+                }
+                RowSeparator(inset = IconInset)
+                GroupedRow(
+                    title = "Evening check-in",
+                    leading = { IconTile(Icons.Rounded.Checklist, accents.purple) },
+                    trailing = {
+                        IosSwitch(
+                            checked = prefs.checkInEnabled,
+                            onCheckedChange = { v -> set { it.copy(checkInEnabled = v) } },
+                        )
+                    },
+                )
+                if (prefs.checkInEnabled) {
+                    RowSeparator(inset = IconInset)
+                    TimeRow(
+                        title = "Check in at",
+                        minute = prefs.checkInMinute,
+                        use24Hour = use24,
+                        onChange = { m -> set { it.copy(checkInMinute = m) } },
+                        leading = { IconTile(Icons.Rounded.Schedule, accents.gray) },
+                    )
+                }
+            }
+        }
+
+        item(key = "assistant") {
+            AssistantSettings(state = state, viewModel = viewModel)
+        }
+
+        item(key = "college") {
+            GroupedSection(
+                header = "College",
+                footer = "Your timetable is built in. Open it only if something changes.",
+            ) {
+                GroupedRow(
+                    title = "Timetable",
+                    leading = { IconTile(Icons.Rounded.School, accents.indigo) },
+                    showChevron = true,
+                    onClick = onOpenTimetable,
+                )
+            }
+        }
+
+        item(key = "data") {
+            GroupedSection(
+                header = "Data",
+                footer = "Everything stays on this device. Only the assistant sends anything out, and " +
+                    "only what you type into it.",
+            ) {
+                GroupedRow(
+                    title = "Rebuild Today",
+                    leading = { IconTile(Icons.Rounded.Refresh, accents.blue) },
+                    onClick = viewModel::rebuildToday,
+                )
+                RowSeparator(inset = IconInset)
+                GroupedRow(
+                    title = "Restore Original Timetable",
+                    leading = { IconTile(Icons.Rounded.Restore, accents.gray) },
+                    onClick = { confirm = Confirm.RESTORE_TIMETABLE },
+                )
+                RowSeparator(inset = IconInset)
+                GroupedRow(
+                    title = "Delete Schedule History",
+                    titleColor = colors.destructive,
+                    leading = { IconTile(Icons.Rounded.DeleteForever, accents.red) },
+                    onClick = { confirm = Confirm.CLEAR_HISTORY },
+                )
+            }
+        }
+
+        item(key = "about") {
+            val version = remember {
+                runCatching {
+                    context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                }.getOrNull().orEmpty()
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = Space.xxl, bottom = Space.s),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "Margin $version".trim(),
+                    style = AppleType.footnoteEmphasized,
+                    color = colors.secondaryLabel,
+                )
+                Text(
+                    text = "Set in Inter, under the SIL Open Font License.",
+                    style = AppleType.caption1,
+                    color = colors.tertiaryLabel,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+
+    confirm?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            title = { Text(pending.title, style = AppleType.headline) },
+            text = { Text(pending.body, style = AppleType.subheadline, color = colors.secondaryLabel) },
+            confirmButton = {
+                TextAction(text = pending.action, emphasized = true, color = colors.destructive, onClick = {
+                    confirm = null
+                    when (pending) {
+                        Confirm.RESTORE_TIMETABLE -> viewModel.restoreSeededTimetable()
+                        Confirm.CLEAR_HISTORY -> viewModel.clearHistory()
+                    }
+                })
+            },
+            dismissButton = { TextAction(text = "Cancel", onClick = { confirm = null }) },
+            containerColor = colors.surface,
+            shape = MarginShape.card,
+        )
     }
 }
 
+/**
+ * The optional assistant. Planning never depends on it: it only turns typed sentences into
+ * checked, structured changes. The key is stored on this device and shown masked.
+ */
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Space.s),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+private fun AssistantSettings(state: SettingsUiState, viewModel: SettingsViewModel) {
+    val colors = MarginTheme.colors
+    val ai = state.ai
+    var modelDraft by remember(ai.provider) { mutableStateOf(ai.model) }
+    var keyDraft by remember { mutableStateOf("") }
+
+    GroupedSection(
+        header = "Assistant",
+        footer = "Margin plans on its own. The assistant only turns what you type into checked " +
+            "changes, so everything works with it off.",
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
+        OptionChips(
+            options = listOf(AiProviderId.NONE, AiProviderId.ANTHROPIC, AiProviderId.OPENAI),
+            selected = ai.provider,
+            label = { it.label },
+            onSelect = { viewModel.setProvider(it) },
         )
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-            ),
-        )
+    }
+
+    if (ai.provider != AiProviderId.NONE) {
+        GroupedSection(header = "Connection") {
+            FormTextField(
+                value = modelDraft,
+                onValueChange = { value ->
+                    modelDraft = value
+                    viewModel.updateAi { it.copy(model = value.trim()) }
+                },
+                placeholder = ai.provider.defaultModel,
+            )
+            RowSeparator()
+            if (ai.apiKey.isBlank()) {
+                FormTextField(
+                    value = keyDraft,
+                    onValueChange = { keyDraft = it },
+                    placeholder = "API key",
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+                RowSeparator()
+                GroupedRow(
+                    title = "Save Key",
+                    titleColor = if (keyDraft.isNotBlank()) colors.tint else colors.tertiaryLabel,
+                    onClick = {
+                        if (keyDraft.isNotBlank()) {
+                            viewModel.updateAi { it.copy(apiKey = keyDraft.trim(), enabled = true) }
+                            keyDraft = ""
+                        }
+                    },
+                )
+            } else {
+                GroupedRow(title = "API key", value = ai.maskedKey)
+                RowSeparator()
+                GroupedRow(title = "Remove Key", titleColor = colors.destructive, onClick = viewModel::clearAiKey)
+            }
+        }
+
+        GroupedSection(
+            modifier = Modifier.padding(top = Space.xl),
+            footer = if (ai.shareScheduleDetail) {
+                "Requests include today's block titles and times. No history and no notes."
+            } else {
+                "Requests include only the current time and your free windows."
+            },
+        ) {
+            GroupedRow(
+                title = "Share the shape of my day",
+                trailing = {
+                    IosSwitch(
+                        checked = ai.shareScheduleDetail,
+                        onCheckedChange = { v -> viewModel.updateAi { it.copy(shareScheduleDetail = v) } },
+                    )
+                },
+            )
+        }
     }
 }
