@@ -113,6 +113,8 @@ object TimetableSeed {
         Routine(
             title = "Lunch",
             kind = RoutineKind.MEAL,
+            // Meals are optional: they exist so they can be switched on, not imposed.
+            active = false,
             category = Category.HEALTH,
             daysMask = Routine.maskOf(MONDAY, TUESDAY, WEDNESDAY, THURSDAY),
             start = at(14, 30),
@@ -121,6 +123,8 @@ object TimetableSeed {
         Routine(
             title = "Lunch",
             kind = RoutineKind.MEAL,
+            // Meals are optional: they exist so they can be switched on, not imposed.
+            active = false,
             category = Category.HEALTH,
             daysMask = Routine.maskOf(FRIDAY),
             start = at(13, 40),
@@ -129,6 +133,8 @@ object TimetableSeed {
         Routine(
             title = "Lunch",
             kind = RoutineKind.MEAL,
+            // Meals are optional: they exist so they can be switched on, not imposed.
+            active = false,
             category = Category.HEALTH,
             daysMask = Routine.maskOf(SATURDAY, SUNDAY),
             start = at(13, 0),
@@ -137,6 +143,8 @@ object TimetableSeed {
         Routine(
             title = "Dinner",
             kind = RoutineKind.MEAL,
+            // Meals are optional: they exist so they can be switched on, not imposed.
+            active = false,
             category = Category.HEALTH,
             daysMask = Routine.EVERY_DAY,
             start = at(20, 0),

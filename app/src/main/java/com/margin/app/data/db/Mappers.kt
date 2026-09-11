@@ -1,9 +1,14 @@
 package com.margin.app.data.db
 
+import com.margin.app.data.db.entity.BreakRecordEntity
 import com.margin.app.data.db.entity.CalendarEventEntity
 import com.margin.app.data.db.entity.CompletionRecordEntity
 import com.margin.app.data.db.entity.DailyCheckInEntity
 import com.margin.app.data.db.entity.DailyPlanEntity
+import com.margin.app.data.db.entity.DayStateEntity
+import com.margin.app.data.db.entity.DeferredWorkEntity
+import com.margin.app.data.db.entity.ExamEntity
+import com.margin.app.data.db.entity.LearningGoalEntity
 import com.margin.app.data.db.entity.ProjectEntity
 import com.margin.app.data.db.entity.RescheduleRecordEntity
 import com.margin.app.data.db.entity.ResourceLinkEntity
@@ -15,16 +20,24 @@ import com.margin.app.data.db.entity.TaskEntity
 import com.margin.app.data.db.entity.TaskSessionEntity
 import com.margin.app.data.db.entity.TimetableEntryEntity
 import com.margin.app.data.db.entity.TimetableExceptionEntity
+import com.margin.app.domain.model.AcademicType
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
+import com.margin.app.domain.model.BreakReason
+import com.margin.app.domain.model.BreakRecord
 import com.margin.app.domain.model.CalendarEvent
 import com.margin.app.domain.model.Category
 import com.margin.app.domain.model.CompletionRecord
 import com.margin.app.domain.model.DailyCheckIn
 import com.margin.app.domain.model.DailyPlan
+import com.margin.app.domain.model.DayState
+import com.margin.app.domain.model.Decision
+import com.margin.app.domain.model.DeferredWork
 import com.margin.app.domain.model.Difficulty
 import com.margin.app.domain.model.EnergyLevel
+import com.margin.app.domain.model.Exam
 import com.margin.app.domain.model.ExceptionType
+import com.margin.app.domain.model.LearningGoal
 import com.margin.app.domain.model.Priority
 import com.margin.app.domain.model.Project
 import com.margin.app.domain.model.RescheduleRecord
@@ -32,6 +45,7 @@ import com.margin.app.domain.model.ResourceLink
 import com.margin.app.domain.model.Routine
 import com.margin.app.domain.model.RoutineKind
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.domain.model.SkipKind
 import com.margin.app.domain.model.SkipRecord
 import com.margin.app.domain.model.SkipResolution
 import com.margin.app.domain.model.Subject
@@ -41,6 +55,10 @@ import com.margin.app.domain.model.TaskStatus
 import com.margin.app.domain.model.TimetableEntry
 import com.margin.app.domain.model.TimetableException
 import com.margin.app.domain.model.TimetableKind
+import com.margin.app.domain.planner.PlannedWork
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import java.time.DayOfWeek
 import java.time.LocalDate
 
@@ -55,6 +73,11 @@ private fun day(value: Int): DayOfWeek =
 
 private fun date(epochDay: Long): LocalDate = LocalDate.ofEpochDay(epochDay)
 
+private fun Set<String>.joined(): String = sorted().joinToString(",")
+
+private fun String.splitSet(): Set<String> =
+    split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
 // ---- Subject -------------------------------------------------------------------------------
 
 fun SubjectEntity.toDomain() = Subject(
@@ -64,6 +87,8 @@ fun SubjectEntity.toDomain() = Subject(
     reviewWeight = reviewWeight,
     colorIndex = colorIndex,
     active = active,
+    importance = importance,
+    difficulty = Difficulty.fromKey(difficulty),
 )
 
 fun Subject.toEntity() = SubjectEntity(
@@ -73,6 +98,8 @@ fun Subject.toEntity() = SubjectEntity(
     reviewWeight = reviewWeight,
     colorIndex = colorIndex,
     active = active,
+    importance = importance,
+    difficulty = difficulty.key,
 )
 
 // ---- Timetable -----------------------------------------------------------------------------
@@ -153,7 +180,7 @@ fun Routine.toEntity() = RoutineEntity(
     protectedTime = protectedTime,
 )
 
-// ---- Project -------------------------------------------------------------------------------
+// ---- Project and learning ------------------------------------------------------------------
 
 fun ProjectEntity.toDomain() = Project(
     id = id,
@@ -172,6 +199,50 @@ fun Project.toEntity() = ProjectEntity(
     colorIndex = colorIndex,
     targetMinutesPerWeek = targetMinutesPerWeek,
     active = active,
+    notes = notes,
+)
+
+fun LearningGoalEntity.toDomain() = LearningGoal(
+    id = id,
+    name = name,
+    weeklyTargetMinutes = weeklyTargetMinutes,
+    sessionMinutes = sessionMinutes,
+    active = active,
+    pauseDuringExams = pauseDuringExams,
+    notes = notes,
+)
+
+fun LearningGoal.toEntity() = LearningGoalEntity(
+    id = id,
+    name = name,
+    weeklyTargetMinutes = weeklyTargetMinutes,
+    sessionMinutes = sessionMinutes,
+    active = active,
+    pauseDuringExams = pauseDuringExams,
+    notes = notes,
+)
+
+// ---- Exams ---------------------------------------------------------------------------------
+
+fun ExamEntity.toDomain() = Exam(
+    id = id,
+    subjectCode = subjectCode,
+    title = title,
+    date = date(date),
+    startMinute = startMinute,
+    endMinute = endMinute,
+    academicType = AcademicType.fromKey(academicType) ?: AcademicType.THEORY,
+    notes = notes,
+)
+
+fun Exam.toEntity() = ExamEntity(
+    id = id,
+    subjectCode = subjectCode,
+    title = title,
+    date = date.toEpochDay(),
+    startMinute = startMinute,
+    endMinute = endMinute,
+    academicType = academicType.key,
     notes = notes,
 )
 
@@ -291,9 +362,17 @@ fun ScheduleBlockEntity.toDomain() = ScheduleBlock(
     elapsedMinutes = elapsedMinutes,
     reason = reason,
     planVersion = planVersion,
+    academicType = AcademicType.fromKey(academicType),
+    candidateId = planKey.ifBlank { null },
+    learningGoalId = learningGoalId,
+    extendedMinutes = extendedMinutes,
+    optional = optional,
+    plannedStart = plannedStart,
+    plannedMinutes = plannedMinutes,
+    skipResolution = skipResolution?.let { runCatching { SkipResolution.valueOf(it) }.getOrNull() },
 )
 
-fun ScheduleBlock.toEntity(planKey: String = "") = ScheduleBlockEntity(
+fun ScheduleBlock.toEntity() = ScheduleBlockEntity(
     id = id,
     date = date.toEpochDay(),
     start = start,
@@ -315,10 +394,42 @@ fun ScheduleBlock.toEntity(planKey: String = "") = ScheduleBlockEntity(
     elapsedMinutes = elapsedMinutes,
     reason = reason,
     planVersion = planVersion,
-    planKey = planKey,
+    planKey = candidateId.orEmpty(),
+    academicType = academicType?.key,
+    extendedMinutes = extendedMinutes,
+    optional = optional,
+    learningGoalId = learningGoalId,
+    plannedStart = plannedStart,
+    plannedMinutes = plannedMinutes,
+    skipResolution = skipResolution?.name,
 )
 
-// ---- Plan and check-in ---------------------------------------------------------------------
+// ---- Plan, day state and check-in ------------------------------------------------------------
+
+@Serializable
+private data class PlannedWorkDto(
+    val id: String,
+    val title: String,
+    val subject: String? = null,
+    val type: String? = null,
+    val minutes: Int,
+)
+
+private val storageJson = Json { ignoreUnknownKeys = true }
+
+fun encodePlannedWork(work: List<PlannedWork>): String =
+    storageJson.encodeToString(
+        ListSerializer(PlannedWorkDto.serializer()),
+        work.map { PlannedWorkDto(it.id, it.title, it.subjectCode, it.academicType?.key, it.minutes) },
+    )
+
+fun decodePlannedWork(raw: String?): List<PlannedWork> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return runCatching {
+        storageJson.decodeFromString(ListSerializer(PlannedWorkDto.serializer()), raw)
+            .map { PlannedWork(it.id, it.title, it.subject, AcademicType.fromKey(it.type), it.minutes) }
+    }.getOrDefault(emptyList())
+}
 
 fun DailyPlanEntity.toDomain() = DailyPlan(
     date = date(date),
@@ -335,6 +446,7 @@ fun DailyCheckInEntity.toDomain() = DailyCheckIn(
     unexpected = unexpected,
     carryForward = carryForward,
     completedAt = completedAt,
+    workload = workload,
 )
 
 fun DailyCheckIn.toEntity() = DailyCheckInEntity(
@@ -344,6 +456,67 @@ fun DailyCheckIn.toEntity() = DailyCheckInEntity(
     unexpected = unexpected,
     carryForward = carryForward,
     completedAt = completedAt,
+    workload = workload,
+)
+
+fun DayStateEntity.toDomain() = DayState(
+    date = date(date),
+    lightDay = lightDay,
+    essentials = essentials.splitSet(),
+    prioritySubjects = prioritySubjects.splitSet(),
+    excludedSubjects = excludedSubjects.splitSet(),
+    buildDecision = Decision.fromKey(buildDecision),
+    buildProjectId = buildProjectId,
+    buildMinutes = buildMinutes,
+    learningDecision = Decision.fromKey(learningDecision),
+    learningGoalId = learningGoalId,
+    learningMinutes = learningMinutes,
+    minimumDay = minimumDay,
+    minimumDayDismissed = minimumDayDismissed,
+    outUntilMinute = outUntilMinute,
+)
+
+fun DayState.toEntity() = DayStateEntity(
+    date = date.toEpochDay(),
+    lightDay = lightDay,
+    essentials = essentials.joined(),
+    prioritySubjects = prioritySubjects.joined(),
+    excludedSubjects = excludedSubjects.joined(),
+    buildDecision = buildDecision.key,
+    buildProjectId = buildProjectId,
+    buildMinutes = buildMinutes,
+    learningDecision = learningDecision.key,
+    learningGoalId = learningGoalId,
+    learningMinutes = learningMinutes,
+    minimumDay = minimumDay,
+    minimumDayDismissed = minimumDayDismissed,
+    outUntilMinute = outUntilMinute,
+)
+
+fun DeferredWorkEntity.toDomain() = DeferredWork(
+    id = id,
+    sourceKey = sourceKey,
+    fromDate = date(fromDate),
+    toDate = date(toDate),
+    subjectCode = subjectCode,
+    academicType = AcademicType.fromKey(academicType),
+    title = title,
+    minutes = minutes,
+    reason = reason,
+    consumed = consumed,
+)
+
+fun DeferredWork.toEntity() = DeferredWorkEntity(
+    id = id,
+    sourceKey = sourceKey,
+    fromDate = fromDate.toEpochDay(),
+    toDate = toDate.toEpochDay(),
+    subjectCode = subjectCode,
+    academicType = academicType?.key,
+    title = title,
+    minutes = minutes,
+    reason = reason,
+    consumed = consumed,
 )
 
 // ---- History -------------------------------------------------------------------------------
@@ -356,6 +529,15 @@ fun CompletionRecordEntity.toDomain() = CompletionRecord(
     category = Category.fromKey(category),
     minutes = minutes,
     at = at,
+    type = BlockType.fromKey(type),
+    subjectCode = subjectCode,
+    academicType = AcademicType.fromKey(academicType),
+    plannedMinutes = plannedMinutes,
+    startMinute = startMinute,
+    projectId = projectId,
+    learningGoalId = learningGoalId,
+    extendedMinutes = extendedMinutes,
+    title = title,
 )
 
 fun SkipRecordEntity.toDomain() = SkipRecord(
@@ -368,6 +550,13 @@ fun SkipRecordEntity.toDomain() = SkipRecord(
     resolution = runCatching { SkipResolution.valueOf(resolution) }
         .getOrDefault(SkipResolution.UNRESOLVED),
     at = at,
+    kind = SkipKind.fromKey(kind),
+    subjectCode = subjectCode,
+    academicType = AcademicType.fromKey(academicType),
+    plannedStart = plannedStart,
+    plannedMinutes = plannedMinutes,
+    category = category?.let { Category.fromKey(it) },
+    type = type?.let { BlockType.fromKey(it) },
 )
 
 fun RescheduleRecordEntity.toDomain() = RescheduleRecord(
@@ -380,6 +569,16 @@ fun RescheduleRecordEntity.toDomain() = RescheduleRecord(
     toDate = date(toDate),
     toStart = toStart,
     reason = reason,
+    at = at,
+)
+
+fun BreakRecordEntity.toDomain() = BreakRecord(
+    id = id,
+    date = date(date),
+    startMinute = startMinute,
+    plannedMinutes = plannedMinutes,
+    actualMinutes = actualMinutes,
+    reason = BreakReason.fromKey(reason),
     at = at,
 )
 

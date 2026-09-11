@@ -9,14 +9,17 @@ import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.prefs.UserPreferences
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.di.AppContainer
+import com.margin.app.domain.usecase.DataExporter
 import com.margin.app.domain.usecase.PlanningService
 import com.margin.app.domain.usecase.SeedService
+import com.margin.app.notifications.AlarmScheduler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import java.time.LocalDate
 
 data class SettingsUiState(
@@ -32,9 +35,16 @@ class SettingsViewModel(
     private val scheduleRepository: ScheduleRepository,
     private val planningService: PlanningService,
     private val seedService: SeedService,
+    private val dataExporter: DataExporter,
+    private val alarmScheduler: AlarmScheduler,
 ) : ViewModel() {
 
     private val message = MutableStateFlow<String?>(null)
+
+    private val exportFile = MutableStateFlow<File?>(null)
+
+    /** A finished export waiting to be handed to the share sheet. */
+    val exported: StateFlow<File?> = exportFile
 
     val state: StateFlow<SettingsUiState> = combine(
         preferencesRepository.preferences,
@@ -48,6 +58,12 @@ class SettingsViewModel(
     fun update(transform: (UserPreferences) -> UserPreferences) = viewModelScope.launch {
         preferencesRepository.update(transform)
         planningService.replan(LocalDate.now())
+        alarmScheduler.rearm()
+    }
+
+    /** Settings that only change how the app looks. Nothing to replan. */
+    fun updateDisplay(transform: (UserPreferences) -> UserPreferences) = viewModelScope.launch {
+        preferencesRepository.update(transform)
     }
 
     fun updateAi(transform: (AiSettings) -> AiSettings) = viewModelScope.launch {
@@ -81,7 +97,10 @@ class SettingsViewModel(
         message.value = "Today was rebuilt."
     }
 
-    /** Wipes every plan and history record. Preferences and the timetable are kept. */
+    /**
+     * Wipes every plan and every history record: sessions, skips, breaks and what the planner
+     * learned from them. Preferences, tasks, exams and the timetable are kept.
+     */
     fun clearHistory() = viewModelScope.launch {
         val today = LocalDate.now()
         var cursor = today.minusDays(365)
@@ -89,9 +108,22 @@ class SettingsViewModel(
             scheduleRepository.clearDay(cursor)
             cursor = cursor.plusDays(1)
         }
+        scheduleRepository.clearHistory()
         planningService.replan(today)
         message.value = "Schedule history cleared."
     }
+
+    fun export() = viewModelScope.launch {
+        runCatching { dataExporter.export() }
+            .onSuccess { exportFile.value = it }
+            .onFailure { message.value = "The export could not be written." }
+    }
+
+    fun consumeExport() {
+        exportFile.value = null
+    }
+
+    fun canScheduleExact(): Boolean = alarmScheduler.canScheduleExact()
 
     fun dismissMessage() {
         message.value = null
@@ -104,6 +136,8 @@ class SettingsViewModel(
             scheduleRepository = container.scheduleRepository,
             planningService = container.planningService,
             seedService = container.seedService,
+            dataExporter = container.dataExporter,
+            alarmScheduler = container.alarmScheduler,
         )
     }
 }

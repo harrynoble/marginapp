@@ -3,9 +3,11 @@ package com.margin.app.ui.tasks
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.repository.GoalRepository
 import com.margin.app.data.repository.TaskRepository
 import com.margin.app.di.AppContainer
 import com.margin.app.domain.model.Category
+import com.margin.app.domain.model.LearningGoal
 import com.margin.app.domain.model.Project
 import com.margin.app.domain.model.Task
 import com.margin.app.domain.model.TaskStatus
@@ -30,6 +32,7 @@ enum class TaskGroup(val label: String) {
 data class TasksUiState(
     val groups: Map<TaskGroup, List<Task>> = emptyMap(),
     val projects: List<Project> = emptyList(),
+    val goals: List<LearningGoal> = emptyList(),
     val filter: Category? = null,
     val showDone: Boolean = false,
     val use24Hour: Boolean = false,
@@ -40,6 +43,7 @@ data class TasksUiState(
 
 class TasksViewModel(
     private val taskRepository: TaskRepository,
+    private val goalRepository: GoalRepository,
     private val preferencesRepository: PreferencesRepository,
     private val planningService: PlanningService,
 ) : ViewModel() {
@@ -49,11 +53,11 @@ class TasksViewModel(
 
     val state: StateFlow<TasksUiState> = combine(
         taskRepository.observeAllTasks(),
-        taskRepository.observeProjects(),
+        combine(taskRepository.observeProjects(), goalRepository.observeGoals()) { p, g -> p to g },
         preferencesRepository.preferences,
         filter,
         showDone,
-    ) { tasks, projects, prefs, category, done ->
+    ) { tasks, (projects, goals), prefs, category, done ->
         val today = LocalDate.now()
         val relevant = tasks
             .filter { it.status != TaskStatus.ARCHIVED }
@@ -86,6 +90,7 @@ class TasksViewModel(
         TasksUiState(
             groups = grouped.filterValues { it.isNotEmpty() },
             projects = projects,
+            goals = goals,
             filter = category,
             showDone = done,
             use24Hour = prefs.use24HourTime,
@@ -137,6 +142,16 @@ class TasksViewModel(
         planningService.replan(LocalDate.now())
     }
 
+    fun saveGoal(goal: LearningGoal) = viewModelScope.launch {
+        goalRepository.upsert(goal)
+        planningService.replan(LocalDate.now())
+    }
+
+    fun deleteGoal(goalId: Long) = viewModelScope.launch {
+        goalRepository.delete(goalId)
+        planningService.replan(LocalDate.now())
+    }
+
     fun observeLinks(taskId: Long) = taskRepository.observeLinks(taskId)
 
     fun addLink(taskId: Long, label: String, url: String) = viewModelScope.launch {
@@ -149,6 +164,7 @@ class TasksViewModel(
     companion object {
         fun create(container: AppContainer) = TasksViewModel(
             taskRepository = container.taskRepository,
+            goalRepository = container.goalRepository,
             preferencesRepository = container.preferencesRepository,
             planningService = container.planningService,
         )

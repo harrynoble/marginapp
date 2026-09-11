@@ -1,5 +1,6 @@
 package com.margin.app
 
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -8,19 +9,25 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.notifications.FocusSessionService
+import com.margin.app.notifications.LaunchRequests
 import com.margin.app.notifications.Notifier
 import com.margin.app.ui.MarginApp
 import com.margin.app.ui.theme.MarginTheme
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 class MainActivity : ComponentActivity() {
 
@@ -33,6 +40,7 @@ class MainActivity : ComponentActivity() {
 
         val container = (application as MarginApplication).container
         Notifier.ensureChannels(this)
+        if (savedInstanceState == null) LaunchRequests.request(intent?.getStringExtra(LaunchRequests.EXTRA_TARGET))
 
         // The schedule changes constantly. Rather than remembering to re-arm the reminder
         // after every action, watch the day and re-arm whenever it actually changes.
@@ -62,7 +70,13 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            val dark = isSystemInDarkTheme()
+            val themeFlow = remember { container.preferencesRepository.preferences.map { it.themeMode } }
+            val themeMode by themeFlow.collectAsStateWithLifecycle(initialValue = THEME_SYSTEM)
+            val dark = when (themeMode) {
+                THEME_LIGHT -> false
+                THEME_DARK -> true
+                else -> isSystemInDarkTheme()
+            }
             // System bar icons follow the app theme, including when it flips while running;
             // otherwise the clock goes dark-on-dark the moment the system switches to night.
             DisposableEffect(dark) {
@@ -78,17 +92,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        LaunchRequests.request(intent.getStringExtra(LaunchRequests.EXTRA_TARGET))
+    }
+
     override fun onResume() {
         super.onResume()
         val container = (application as MarginApplication).container
         lifecycleScope.launch {
-            // Coming back after midnight, or after a day away, should not show a stale plan.
-            runCatching { container.planningService.ensurePlan(LocalDate.now()) }
+            // Coming back after midnight, or after a day away, should not show a stale plan:
+            // earlier days are closed out, then sessions whose time passed are placed again.
+            runCatching {
+                container.dayRollover.run()
+                container.planningService.ensurePlan(LocalDate.now())
+                container.planningService.refreshIfStale(LocalDateTime.now())
+            }
         }
     }
 
     private companion object {
         const val REARM_DEBOUNCE_MILLIS = 1_500L
+        const val THEME_SYSTEM = "system"
+        const val THEME_LIGHT = "light"
+        const val THEME_DARK = "dark"
 
         // The scrims enableEdgeToEdge uses by default, kept for three-button navigation.
         val LIGHT_SCRIM = Color.argb(0xE6, 0xFF, 0xFF, 0xFF)

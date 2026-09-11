@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Coffee
@@ -60,6 +62,8 @@ fun AddSheet(
     onNewTask: () -> Unit,
     onNewEvent: () -> Unit,
     onBreak: (Int) -> Unit,
+    onGoingOut: () -> Unit,
+    onAddExam: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = MarginTheme.colors
@@ -111,6 +115,22 @@ fun AddSheet(
                     }
                 }
             }
+            RowSeparator(inset = 58.dp)
+            GroupedRow(
+                title = "Going out",
+                subtitle = "Say when you'll be back; the rest of the day is replanned",
+                leading = { IconTile(Icons.AutoMirrored.Rounded.DirectionsWalk, accents.purple) },
+                showChevron = true,
+                onClick = onGoingOut,
+            )
+            RowSeparator(inset = 58.dp)
+            GroupedRow(
+                title = "Add an exam",
+                subtitle = "Revision spreads out across the days left",
+                leading = { IconTile(Icons.Rounded.School, accents.indigo) },
+                showChevron = true,
+                onClick = onAddExam,
+            )
         }
 
         GroupedSection(

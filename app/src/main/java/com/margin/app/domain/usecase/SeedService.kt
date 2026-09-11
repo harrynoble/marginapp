@@ -3,11 +3,15 @@ package com.margin.app.domain.usecase
 import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.data.seed.TimetableSeed
+import com.margin.app.domain.model.RoutineKind
 
 /**
  * Puts the known timetable in place on first run so the app opens with a real week already
  * loaded instead of an onboarding form. Runs once; the version guard means a later seed
  * change can be rolled out without wiping edits the user has made.
+ *
+ * Version 2: meals are no longer fixed blocks. Existing meal routines are switched off rather
+ * than deleted, so anyone who wants them back can turn them on in the timetable screen.
  */
 class SeedService(
     private val timetableRepository: TimetableRepository,
@@ -17,6 +21,16 @@ class SeedService(
     suspend fun seedIfNeeded(): Boolean {
         val prefs = preferencesRepository.current()
         if (prefs.seedVersion >= CURRENT_SEED_VERSION) return false
+
+        if (prefs.seedVersion >= 1) {
+            // Upgrading an existing install: keep the user's week, make meals optional.
+            timetableRepository.allRoutines()
+                .filter { it.kind == RoutineKind.MEAL && it.active }
+                .forEach { timetableRepository.upsertRoutine(it.copy(active = false)) }
+            preferencesRepository.update { it.copy(seedVersion = CURRENT_SEED_VERSION) }
+            return false
+        }
+
         if (!timetableRepository.isEmpty()) {
             // The user already built their own week. Record the version and leave it alone.
             preferencesRepository.update { it.copy(seedVersion = CURRENT_SEED_VERSION) }
@@ -39,6 +53,6 @@ class SeedService(
     }
 
     private companion object {
-        const val CURRENT_SEED_VERSION = 1
+        const val CURRENT_SEED_VERSION = 2
     }
 }

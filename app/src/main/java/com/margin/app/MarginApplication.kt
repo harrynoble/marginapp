@@ -29,6 +29,9 @@ class MarginApplication : Application(), Configuration.Provider {
         scope.launch {
             runCatching {
                 container.seedService.seedIfNeeded()
+                // Close out any days the app was not opened on before building today, so
+                // yesterday's unfinished work is carried rather than forgotten.
+                container.dayRollover.run()
                 container.planningService.ensurePlan(LocalDate.now())
                 container.planningService.ensurePlan(LocalDate.now().plusDays(1))
                 container.alarmScheduler.rearm()

@@ -14,7 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Checklist
-import androidx.compose.material.icons.rounded.NextPlan
+import androidx.compose.material.icons.automirrored.rounded.NextPlan
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.SkipNext
@@ -191,7 +191,7 @@ fun BlockActionsSheet(
                 RowSeparator(inset = 58.dp)
                 GroupedRow(
                     title = "Move to tomorrow",
-                    leading = { IconTile(Icons.Rounded.NextPlan, MarginTheme.accents.blue) },
+                    leading = { IconTile(Icons.AutoMirrored.Rounded.NextPlan, MarginTheme.accents.blue) },
                     onClick = { callbacks.onMoveToTomorrow(block.id); onDismiss() },
                 )
                 RowSeparator(inset = 58.dp)

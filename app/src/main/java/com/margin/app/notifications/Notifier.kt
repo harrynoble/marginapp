@@ -15,14 +15,14 @@ import androidx.core.content.ContextCompat
 import com.margin.app.MainActivity
 import com.margin.app.R
 import com.margin.app.core.MarginTime
-import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.ScheduleBlock
 
 /**
- * All notification text and channels in one place.
+ * All notification plumbing in one place.
  *
  * The rule the app follows: a notification either tells the user what to do next or explains
- * a change they did not make. Nothing else is ever posted.
+ * a change they did not make. Guidance shares one slot, so a new prompt replaces the last one
+ * instead of piling up in the shade.
  */
 object Notifier {
 
@@ -30,8 +30,8 @@ object Notifier {
     const val CHANNEL_FOCUS = "focus"
     const val CHANNEL_PLANNING = "planning"
 
-    const val NOTIFICATION_UP_NEXT = 1001
-    const val NOTIFICATION_BREAK_OVER = 1002
+    /** The single slot every guidance prompt uses. */
+    const val NOTIFICATION_GUIDE = 1001
     const val NOTIFICATION_PLAN_CHANGED = 1003
     const val NOTIFICATION_CHECK_IN = 1004
     const val NOTIFICATION_FOCUS = 1005
@@ -81,101 +81,45 @@ object Notifier {
             NotificationManagerCompat.from(context).areNotificationsEnabled()
         }
 
-    /** "Up next: Data Structures review, 35 min" with Start, Snooze and Skip actions. */
-    fun postUpNext(context: Context, block: ScheduleBlock, use24Hour: Boolean, leadMinutes: Int) {
+    data class Action(val label: String, val intent: PendingIntent)
+
+    /** Posts a guidance prompt into the shared slot, replacing whatever was there. */
+    fun postGuide(
+        context: Context,
+        title: String,
+        body: String,
+        actions: List<Action>,
+        silent: Boolean,
+        openTarget: String? = null,
+    ) {
         if (!canPost(context)) return
-
-        val title = when {
-            leadMinutes <= 0 -> "Starting now: " + block.title
-            block.type == BlockType.BREAK -> "Break in " + leadMinutes + " min"
-            else -> "Up next: " + block.title
-        }
-        val body = buildString {
-            append(MarginTime.formatTime(block.start, use24Hour))
-            append(" to ")
-            append(MarginTime.formatTime(block.end, use24Hour))
-            append(" · ")
-            append(MarginTime.formatDuration(block.duration))
-            block.subtitle?.let {
-                append(" · ")
-                append(it)
-            }
-        }
-
         val builder = NotificationCompat.Builder(context, CHANNEL_SCHEDULE)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(openApp(context))
+            .setContentIntent(openIntent(context, openTarget))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-
-        if (block.type.isActionable) {
-            builder.addAction(
-                0,
-                "Start",
-                action(context, NotificationActionReceiver.ACTION_START, block.id),
-            )
-            builder.addAction(
-                0,
-                "Snooze 10",
-                action(context, NotificationActionReceiver.ACTION_SNOOZE, block.id),
-            )
-            builder.addAction(
-                0,
-                "Skip",
-                action(context, NotificationActionReceiver.ACTION_SKIP, block.id),
-            )
-        }
-
-        post(context, NOTIFICATION_UP_NEXT, builder.build())
-    }
-
-    fun postBreakOver(context: Context, next: ScheduleBlock?) {
-        if (!canPost(context)) return
-        val body = next?.let { "Ready for " + it.title + "?" }
-            ?: "Nothing scheduled next. The rest of the time is yours."
-        val builder = NotificationCompat.Builder(context, CHANNEL_SCHEDULE)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Your break is over")
-            .setContentText(body)
-            .setContentIntent(openApp(context))
-            .setAutoCancel(true)
-        if (next != null && next.type.isActionable) {
-            builder.addAction(
-                0,
-                "Start",
-                action(context, NotificationActionReceiver.ACTION_START, next.id),
-            )
-        }
-        post(context, NOTIFICATION_BREAK_OVER, builder.build())
+            .setSilent(silent)
+            .setOnlyAlertOnce(true)
+        // Android shows at most three buttons; the rest of the choices live in the app.
+        actions.take(3).forEach { builder.addAction(0, it.label, it.intent) }
+        post(context, NOTIFICATION_GUIDE, builder.build())
     }
 
     fun postPlanChanged(context: Context, summary: String, detail: String?) {
         if (!canPost(context)) return
         val builder = NotificationCompat.Builder(context, CHANNEL_PLANNING)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Schedule updated")
+            .setContentTitle("Your schedule changed")
             .setContentText(summary)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail ?: summary))
-            .setContentIntent(openApp(context))
+            .setContentIntent(openIntent(context, null))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
         post(context, NOTIFICATION_PLAN_CHANGED, builder.build())
-    }
-
-    fun postCheckIn(context: Context, summary: String) {
-        if (!canPost(context)) return
-        val builder = NotificationCompat.Builder(context, CHANNEL_PLANNING)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("How did today go?")
-            .setContentText(summary)
-            .setContentIntent(openApp(context))
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-        post(context, NOTIFICATION_CHECK_IN, builder.build())
     }
 
     fun focusNotification(context: Context, block: ScheduleBlock, remainingMinutes: Int): Notification =
@@ -183,14 +127,14 @@ object Notifier {
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(block.title)
             .setContentText(MarginTime.formatDuration(remainingMinutes) + " left")
-            .setContentIntent(openApp(context))
+            .setContentIntent(openIntent(context, null))
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(
                 0,
                 "Finish",
-                action(context, NotificationActionReceiver.ACTION_COMPLETE, block.id),
+                actionIntent(context, NotificationActionReceiver.ACTION_COMPLETE, block.id),
             )
             .build()
 
@@ -199,26 +143,36 @@ object Notifier {
     }
 
     private fun post(context: Context, id: Int, notification: Notification) {
+        // Declined notifications are a choice, not an error: post nothing and carry on.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+            androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
         runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
     }
 
-    private fun openApp(context: Context): PendingIntent =
+    /** Opens the app, optionally straight into a particular sheet such as "I'm out". */
+    fun openIntent(context: Context, target: String?): PendingIntent =
         PendingIntent.getActivity(
             context,
-            0,
+            (target ?: "open").hashCode(),
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (target != null) putExtra(LaunchRequests.EXTRA_TARGET, target)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    private fun action(context: Context, actionName: String, blockId: Long): PendingIntent =
+    fun actionIntent(context: Context, actionName: String, blockId: Long, extra: Int = 0): PendingIntent =
         PendingIntent.getBroadcast(
             context,
-            (actionName + blockId).hashCode(),
+            (actionName + blockId + ":" + extra).hashCode(),
             Intent(context, NotificationActionReceiver::class.java).apply {
                 action = actionName
                 putExtra(NotificationActionReceiver.EXTRA_BLOCK_ID, blockId)
+                putExtra(NotificationActionReceiver.EXTRA_VALUE, extra)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

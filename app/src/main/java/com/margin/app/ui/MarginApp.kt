@@ -43,8 +43,13 @@ import androidx.navigation.navArgument
 import com.margin.app.di.AppContainer
 import com.margin.app.domain.model.CalendarEvent
 import com.margin.app.domain.model.DailyCheckIn
+import com.margin.app.domain.model.LearningGoal
+import com.margin.app.domain.model.Project
+import com.margin.app.notifications.LaunchRequests
 import com.margin.app.ui.assistant.AddSheet
 import com.margin.app.ui.assistant.AssistantViewModel
+import com.margin.app.ui.exams.ExamsScreen
+import com.margin.app.ui.exams.ExamsViewModel
 import com.margin.app.ui.focus.FocusScreen
 import com.margin.app.ui.focus.FocusViewModel
 import com.margin.app.ui.glass.GlassCircleButton
@@ -76,7 +81,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /** Screens pushed on top of the tabs, which slide in from the edge and hide the tab bar. */
-private val PushedRoutes = setOf(Routes.SETTINGS, Routes.TIMETABLE, Routes.FOCUS)
+private val PushedRoutes = setOf(Routes.SETTINGS, Routes.TIMETABLE, Routes.EXAMS, Routes.FOCUS)
 
 private fun NavBackStackEntry.isPushed() = destination.route in PushedRoutes
 
@@ -112,9 +117,25 @@ fun MarginApp(container: AppContainer) {
     when (onboarded) {
         null -> Box(Modifier.fillMaxSize().background(colors.groupedBackground))
 
-        false -> OnboardingScreen(viewModel = settingsViewModel, onFinish = { onboarded = true })
+        false -> OnboardingScreen(
+            viewModel = settingsViewModel,
+            onFinish = { onboarded = true },
+            onSaveGoals = { project, learning ->
+                scope.launch {
+                    project?.let { container.taskRepository.upsertProject(Project(name = it)) }
+                    learning?.let { container.goalRepository.upsert(LearningGoal(name = it)) }
+                    container.planningService.replan(LocalDate.now())
+                }
+            },
+        )
 
         true -> CompositionLocalProvider(LocalAddAction provides addAction) {
+            // A notification that asked a question opens on Today, wherever the app was left,
+            // so the answer sheet is the first thing on screen.
+            val pendingTarget by LaunchRequests.pending.collectAsStateWithLifecycle()
+            LaunchedEffect(pendingTarget) {
+                if (pendingTarget != null && route != Routes.TODAY) navigateToTab(navController, Routes.TODAY)
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -171,7 +192,12 @@ fun MarginApp(container: AppContainer) {
                             onOpenFocus = { navController.navigate(Routes.focus(it)) },
                             onOpenTask = { navigateToTab(navController, Routes.TASKS) },
                             onOpenCheckIn = { showCheckIn = true },
+                            onOpenExams = { navController.navigate(Routes.EXAMS) },
                         )
+                    }
+                    composable(Routes.EXAMS) {
+                        val viewModel = marginViewModel("exams") { ExamsViewModel.create(container) }
+                        ExamsScreen(viewModel = viewModel, onBack = { navController.popBackStack() })
                     }
                     composable(Routes.PLAN) {
                         val viewModel = marginViewModel("plan") { PlanViewModel.create(container) }
@@ -193,6 +219,7 @@ fun MarginApp(container: AppContainer) {
                             viewModel = settingsViewModel,
                             onBack = { navController.popBackStack() },
                             onOpenTimetable = { navController.navigate(Routes.TIMETABLE) },
+                            onOpenExams = { navController.navigate(Routes.EXAMS) },
                         )
                     }
                     composable(Routes.TIMETABLE) {
@@ -207,7 +234,15 @@ fun MarginApp(container: AppContainer) {
                         val viewModel = marginViewModel("focus-$blockId") {
                             FocusViewModel.create(container, blockId)
                         }
-                        FocusScreen(viewModel = viewModel, onClose = { navController.popBackStack() })
+                        FocusScreen(
+                            viewModel = viewModel,
+                            onClose = { navController.popBackStack() },
+                            onOpenNext = { nextId ->
+                                navController.navigate(Routes.focus(nextId)) {
+                                    popUpTo(Routes.FOCUS) { inclusive = true }
+                                }
+                            },
+                        )
                     }
                 }
 
@@ -263,6 +298,15 @@ fun MarginApp(container: AppContainer) {
                         showAdd = false
                         scope.launch { container.scheduleActions.takeBreak(minutes) }
                     },
+                    onGoingOut = {
+                        showAdd = false
+                        LaunchRequests.request(LaunchRequests.TARGET_OUT)
+                        navigateToTab(navController, Routes.TODAY)
+                    },
+                    onAddExam = {
+                        showAdd = false
+                        navController.navigate(Routes.EXAMS)
+                    },
                 )
             }
 
@@ -315,7 +359,7 @@ fun MarginApp(container: AppContainer) {
                 CheckInSheet(
                     blocks = blocks,
                     onDismiss = { showCheckIn = false },
-                    onSave = { energy, note, carryForward ->
+                    onSave = { energy, note, carryForward, workload ->
                         showCheckIn = false
                         scope.launch {
                             container.scheduleRepository.saveCheckIn(
@@ -325,6 +369,7 @@ fun MarginApp(container: AppContainer) {
                                     note = note,
                                     carryForward = carryForward,
                                     completedAt = System.currentTimeMillis(),
+                                    workload = workload,
                                 ),
                             )
                             if (carryForward) container.planningService.replan(LocalDate.now().plusDays(1))

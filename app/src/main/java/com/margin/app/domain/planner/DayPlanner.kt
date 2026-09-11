@@ -6,12 +6,17 @@ import com.margin.app.domain.model.Difficulty
 import com.margin.app.domain.model.EnergyLevel
 import com.margin.app.domain.model.TimeRange
 import com.margin.app.domain.model.subtractAll
+import kotlin.math.abs
 
 /**
  * The scheduling engine.
  *
  * Deterministic by construction: it never reads the clock, never uses randomness, and every
  * sort ends in a tiebreak on id. Given the same [PlannerInput] it returns the same [PlannedDay].
+ *
+ * The shape of a day it produces: commitments and transitions first, leisure protected at the
+ * end of the evening, academic work in the earliest sensible slots, then build, then learning,
+ * each separated by a short break. Free time is left free.
  *
  * Pure Kotlin, no Android. See docs/SCHEDULING.md for the pass-by-pass description.
  */
@@ -30,7 +35,7 @@ class DayPlanner {
 
         placed += sleepBlocks(prefs)
 
-        // Blocks already completed, skipped or running. Never touched, never re-planned.
+        // Blocks already completed, skipped, running or pinned. Never touched, never re-planned.
         val settled = input.settled.sortedBy { it.range }
         placed += settled
 
@@ -43,7 +48,7 @@ class DayPlanner {
         placed += commitments.map { it.toPlacedBlock() }
 
         // ---- Pass 3: transitions ---------------------------------------------------------
-        placed += transitionBuffers(commitments, prefs, frame)
+        placed += transitionBuffers(commitments, settled, prefs, frame)
 
         // ---- Pass 4: free intervals ------------------------------------------------------
         val occupied = placed.map { it.range }.distinct()
@@ -53,16 +58,14 @@ class DayPlanner {
             .filter { it.duration >= prefs.minUsefulSlotMinutes }
 
         if (free.isEmpty() && input.work.isNotEmpty()) {
-            diagnostics += Diagnostic.Overloaded(
-                shortfallMinutes = input.work.sumOf { it.minutes },
-                kind = QuotaKind.BUILD,
-                message = "The day is fully committed, so nothing else could be scheduled.",
+            diagnostics += Diagnostic.NothingToPlan(
+                "The day is fully committed, so nothing else could be scheduled.",
             )
         }
 
-        // ---- Pass 5: reserve protected time ----------------------------------------------
+        // ---- Pass 5: reserve leisure -----------------------------------------------------
         val reservations = mutableListOf<PlacedBlock>()
-        for (quota in input.quotas.sortedWith(compareBy({ it.kind.ordinal }, { it.id }))) {
+        for (quota in input.quotas.filter { it.kind == QuotaKind.LEISURE }.sortedBy { it.id }) {
             if (quota.minutes <= 0) continue
             val outcome = reserve(quota, free, prefs)
             reservations += outcome.blocks
@@ -71,21 +74,53 @@ class DayPlanner {
                 diagnostics += Diagnostic.Overloaded(
                     shortfallMinutes = outcome.shortfall,
                     kind = quota.kind,
+                    message = "Today is short on downtime by ${outcome.shortfall} min. Nothing was " +
+                        "deleted; move or drop something if you want the time back.",
+                )
+            }
+        }
+
+        // Build and learning come after the academic work, but their time is held back from
+        // anything that is not urgent, so a pile of ordinary work cannot swallow the evening.
+        val postQuotas = input.quotas
+            .filter { it.kind != QuotaKind.LEISURE && it.minutes > 0 }
+            .sortedWith(compareBy({ it.kind.ordinal }, { it.id }))
+        val protectedBudget = (free.sumOf { it.duration } - postQuotas.sumOf { it.minutes })
+            .coerceAtLeast(0)
+
+        // ---- Passes 6 to 8: score, place, break ------------------------------------------
+        val previousStarts = input.previous
+            .filter { it.candidateId != null }
+            .groupBy({ it.candidateId!! }, { it.start })
+        val placement = placeWork(input.work, free, prefs, settled, protectedBudget, previousStarts)
+        placed += placement.blocks
+        diagnostics += placement.diagnostics
+
+        // ---- Pass 8b: build, then learning, after the work --------------------------------
+        var remaining = free
+            .subtractAll(placement.blocks.map { it.range })
+            .filter { it.duration >= prefs.minUsefulSlotMinutes }
+        val placedSoFar = (settled + placement.blocks).toMutableList()
+        for (quota in postQuotas) {
+            val outcome = placeAfterWork(quota, remaining, prefs, placedSoFar)
+            placed += outcome.blocks
+            placedSoFar += outcome.blocks
+            remaining = outcome.free
+            if (outcome.shortfall >= MIN_REPORTED_SHORTFALL) {
+                diagnostics += Diagnostic.Overloaded(
+                    shortfallMinutes = outcome.shortfall,
+                    kind = quota.kind,
                     message = when (quota.kind) {
-                        QuotaKind.LEISURE ->
-                            "Today is short on downtime by ${outcome.shortfall} min. Nothing was " +
-                                "deleted; move or drop something if you want the time back."
                         QuotaKind.BUILD ->
                             "Only part of your build time fits today, short by ${outcome.shortfall} min."
+                        QuotaKind.LEARNING ->
+                            "Learning time is short by ${outcome.shortfall} min today."
+                        QuotaKind.LEISURE -> "Downtime is short by ${outcome.shortfall} min."
                     },
                 )
             }
         }
 
-        // ---- Passes 6 to 8: score, place, break ------------------------------------------
-        val placement = placeWork(input.work, free, prefs, settled)
-        placed += placement.blocks
-        diagnostics += placement.diagnostics
         placed += reservations
 
         // ---- Pass 9: fill the remainder --------------------------------------------------
@@ -196,6 +231,7 @@ class DayPlanner {
         projectId = projectId,
         subjectCode = subjectCode,
         locked = locked,
+        academicType = academicType,
     )
 
     // ---------------------------------------------------------------------------------------
@@ -203,38 +239,51 @@ class DayPlanner {
     // ---------------------------------------------------------------------------------------
 
     /**
-     * A commute after the last class of the day and a decompression window after any long
+     * A commute after the last class of the day and a recovery window after any long
      * commitment. Without this the plan reads "13:40 college ends, 13:41 start studying".
+     * Settled blocks occupy their time too, so a transition that already happened earlier
+     * today is not planned a second time.
      */
     private fun transitionBuffers(
         commitments: List<Commitment>,
+        settled: List<PlacedBlock>,
         prefs: PlannerPreferences,
         frame: TimeRange,
     ): List<PlacedBlock> {
         val buffers = mutableListOf<PlacedBlock>()
-        val occupied = commitments.map { it.range }.toMutableList()
+        val occupied = (commitments.map { it.range } + settled.map { it.range }).toMutableList()
 
-        val classes = commitments.filter { it.type == BlockType.CLASS }
+        val classes = commitments.filter { it.type == BlockType.CLASS } +
+            settled.filter { it.type == BlockType.CLASS }.map {
+                Commitment(id = it.key, title = it.title, range = it.range, type = it.type, category = it.category)
+            }
         var commuteEnd: Int? = null
 
         if (classes.isNotEmpty() && prefs.commuteMinutes > 0) {
             val lastEnd = classes.maxOf { it.range.end }
-            val commute = fitBuffer(lastEnd, prefs.commuteMinutes, occupied, frame)
-            if (commute != null) {
-                buffers += PlacedBlock(
-                    key = "commute:$lastEnd",
-                    range = commute,
-                    type = BlockType.COMMUTE,
-                    title = "Travel home",
-                    category = Category.PERSONAL,
-                    reason = "Getting back after college.",
-                )
-                occupied += commute
-                commuteEnd = commute.end
+            val alreadyTravelled = settled.firstOrNull {
+                it.type == BlockType.COMMUTE && it.start >= lastEnd - MIN_BUFFER
+            }
+            if (alreadyTravelled != null) {
+                commuteEnd = alreadyTravelled.end
+            } else {
+                val commute = fitBuffer(lastEnd, prefs.commuteMinutes, occupied, frame)
+                if (commute != null) {
+                    buffers += PlacedBlock(
+                        key = "commute:$lastEnd",
+                        range = commute,
+                        type = BlockType.COMMUTE,
+                        title = "Travel home",
+                        category = Category.PERSONAL,
+                        reason = "Getting back after college.",
+                    )
+                    occupied += commute
+                    commuteEnd = commute.end
+                }
             }
         }
 
-        // Decompression after anything long enough to be draining.
+        // Recovery after anything long enough to be draining.
         val anchors = buildList {
             if (classes.isNotEmpty()) {
                 val span = classes.maxOf { it.range.end } - classes.minOf { it.range.start }
@@ -249,6 +298,7 @@ class DayPlanner {
 
         for (anchor in anchors) {
             if (prefs.decompressionMinutes <= 0) continue
+            if (settled.any { it.type == BlockType.DECOMPRESS && abs(it.start - anchor) <= MIN_BUFFER }) continue
             val slot = fitBuffer(anchor, prefs.decompressionMinutes, occupied, frame) ?: continue
             buffers += PlacedBlock(
                 key = "decompress:${slot.start}",
@@ -256,7 +306,7 @@ class DayPlanner {
                 type = BlockType.DECOMPRESS,
                 title = "Settle in",
                 category = Category.PERSONAL,
-                reason = "A gap before work starts, so the day is not back to back.",
+                reason = "Recovery time before work starts, so the day is not back to back.",
             )
             occupied += slot
         }
@@ -292,7 +342,7 @@ class DayPlanner {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Pass 5: reservations. This is what protects leisure and build time.
+    // Pass 5: leisure reservation. This is what protects downtime.
     // ---------------------------------------------------------------------------------------
 
     private data class Reservation(
@@ -316,28 +366,15 @@ class DayPlanner {
         val taken = mutableListOf<PlacedBlock>()
         var pool = free
 
-        // Leisure belongs at the end of the day, build time earlier where the user is still
-        // sharp. Picking the slot from opposite ends of the pool is what produces that.
-        val preferLatest = quota.kind == QuotaKind.LEISURE
-
         while (remaining >= quota.minChunk) {
-            val inWindow = pool.mapNotNull { slot ->
+            val windowed = pool.mapNotNull { slot ->
                 slot.intersect(quota.window)?.let { slot to it }
             }.filter { it.second.duration >= quota.minChunk }
+                .maxWithOrNull(compareBy({ it.second.start }, { it.second.end }))
 
-            val windowed = if (preferLatest) {
-                inWindow.maxWithOrNull(compareBy({ it.second.start }, { it.second.end }))
-            } else {
-                inWindow.minWithOrNull(compareBy({ it.second.start }, { it.second.end }))
-            }
-
-            val anywhere = pool.filter { it.duration >= quota.minChunk }.let { usable ->
-                if (preferLatest) {
-                    usable.maxWithOrNull(compareBy({ it.start }, { it.end }))
-                } else {
-                    usable.minWithOrNull(compareBy({ it.start }, { it.end }))
-                }
-            }?.let { it to it }
+            val anywhere = pool.filter { it.duration >= quota.minChunk }
+                .maxWithOrNull(compareBy({ it.start }, { it.end }))
+                ?.let { it to it }
 
             val target = windowed ?: anywhere ?: break
 
@@ -345,24 +382,18 @@ class DayPlanner {
             val length = prefs.roundDown(minOf(remaining, usable.duration))
             if (length < quota.minChunk) break
 
-            // Leisure anchors to the end of its slot; build anchors to the start so it does
-            // not push the evening back.
-            val range = if (quota.kind == QuotaKind.LEISURE) {
-                TimeRange(usable.end - length, usable.end)
-            } else {
-                TimeRange(usable.start, usable.start + length)
-            }
+            val range = TimeRange(usable.end - length, usable.end)
 
             taken += PlacedBlock(
                 key = "${quota.id}:${range.start}",
                 range = range,
                 type = quota.type,
                 title = quota.title,
+                subtitle = quota.subtitle,
                 category = quota.category,
-                reason = when (quota.kind) {
-                    QuotaKind.LEISURE -> "Reserved before any work was placed."
-                    QuotaKind.BUILD -> "Your daily build time, reserved before other work."
-                },
+                candidateId = quota.id,
+                optional = quota.optional,
+                reason = quota.reason ?: "Reserved before any work was placed.",
             )
             remaining -= length
             pool = pool.flatMap { if (it == owner) it.minus(range) else listOf(it) }
@@ -370,6 +401,101 @@ class DayPlanner {
         }
 
         return Reservation(taken.sortedBy { it.range }, pool, remaining.coerceAtLeast(0))
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Pass 8b: build and learning, after the academic work
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Places a build or learning quota in the earliest slot inside its window, which in
+     * practice is straight after the academic work. When it follows a run of work directly,
+     * a short break goes in first.
+     */
+    private fun placeAfterWork(
+        quota: QuotaCandidate,
+        free: List<TimeRange>,
+        prefs: PlannerPreferences,
+        before: List<PlacedBlock>,
+    ): Reservation {
+        var remaining = quota.minutes
+        val taken = mutableListOf<PlacedBlock>()
+        var pool = free
+        val context = before.toMutableList()
+
+        while (remaining >= quota.minChunk && pool.isNotEmpty()) {
+            val inWindow = pool.mapNotNull { slot ->
+                slot.intersect(quota.window)?.let { slot to it }
+            }.filter { it.second.duration >= quota.minChunk }
+                .minWithOrNull(compareBy({ it.second.start }, { it.second.end }))
+            val anywhere = pool.filter { it.duration >= quota.minChunk }
+                .minWithOrNull(compareBy({ it.start }, { it.end }))
+                ?.let { it to it }
+            val (owner, usable) = inWindow ?: anywhere ?: break
+
+            var cursor = usable.start
+            val pieces = mutableListOf<PlacedBlock>()
+            if (runEndingAt(context, cursor) >= TRANSITION_RUN) {
+                val breakLength = minOf(prefs.shortBreakMinutes, TRANSITION_BREAK)
+                if (breakLength >= MIN_BREAK && usable.end - (cursor + breakLength) >= quota.minChunk) {
+                    val gap = TimeRange(cursor, cursor + breakLength)
+                    pieces += PlacedBlock(
+                        key = "break:${gap.start}",
+                        range = gap,
+                        type = BlockType.BREAK,
+                        title = "Break",
+                        category = Category.LEISURE,
+                        reason = "A short gap between one thing and the next.",
+                    )
+                    cursor += breakLength
+                }
+            }
+
+            val length = prefs.roundDown(minOf(remaining, usable.end - cursor))
+            if (length < quota.minChunk) {
+                pool = pool.filter { it != owner }
+                continue
+            }
+
+            val range = TimeRange(cursor, cursor + length)
+            pieces += PlacedBlock(
+                key = "${quota.id}:${range.start}",
+                range = range,
+                type = quota.type,
+                title = quota.title,
+                subtitle = quota.subtitle,
+                category = quota.category,
+                projectId = quota.projectId,
+                learningGoalId = quota.learningGoalId,
+                candidateId = quota.id,
+                optional = quota.optional,
+                reason = quota.reason ?: when (quota.kind) {
+                    QuotaKind.BUILD -> "Your build time, after the academic work."
+                    QuotaKind.LEARNING -> "Time for your learning goal."
+                    QuotaKind.LEISURE -> "Reserved downtime."
+                },
+            )
+            taken += pieces
+            context += pieces
+            remaining -= length
+            val used = TimeRange(usable.start, range.end)
+            pool = pool.flatMap { if (it == owner) it.minus(used) else listOf(it) }
+                .filter { it.duration >= prefs.minUsefulSlotMinutes }
+        }
+
+        return Reservation(taken.sortedBy { it.range }, pool, remaining.coerceAtLeast(0))
+    }
+
+    /** Minutes of back-to-back work that end exactly at [minute]. A break resets the count. */
+    private fun runEndingAt(blocks: List<PlacedBlock>, minute: Int): Int {
+        var cursor = minute
+        var total = 0
+        while (true) {
+            val previous = blocks.firstOrNull { it.type.isWork && it.end == cursor } ?: break
+            total += previous.duration
+            cursor = previous.start
+        }
+        return total
     }
 
     // ---------------------------------------------------------------------------------------
@@ -387,6 +513,8 @@ class DayPlanner {
         free: List<TimeRange>,
         prefs: PlannerPreferences,
         settled: List<PlacedBlock>,
+        protectedBudget: Int,
+        previousStarts: Map<String, List<Int>>,
     ): Placement {
         if (work.isEmpty()) return Placement(emptyList(), emptyList(), emptyList())
 
@@ -398,6 +526,7 @@ class DayPlanner {
         var workBudget = (prefs.effectiveWorkCeiling -
             settled.filter { it.type.isWork }.sumOf { it.duration }).coerceAtLeast(0)
         var ceilingHit = workBudget <= 0 && remaining.isNotEmpty()
+        var usedSoFar = 0
 
         for (interval in free.sortedWith(compareBy({ it.start }, { it.end }))) {
             if (workBudget <= 0) break
@@ -408,8 +537,16 @@ class DayPlanner {
                 val available = interval.end - cursor
                 if (available < prefs.minUsefulSlotMinutes) break
 
-                val choice = chooseCandidate(byId, remaining, cursor, prefs, available, workBudget)
-                    ?: break
+                val choice = chooseCandidate(
+                    byId = byId,
+                    remaining = remaining,
+                    cursor = cursor,
+                    prefs = prefs,
+                    available = available,
+                    workBudget = workBudget,
+                    protectedLeft = protectedBudget - usedSoFar,
+                    previousStarts = previousStarts,
+                ) ?: break
                 val candidate = choice.candidate
 
                 // A break is due before this session would push the run past the limit.
@@ -443,11 +580,15 @@ class DayPlanner {
                     taskId = candidate.taskId,
                     projectId = candidate.projectId,
                     subjectCode = candidate.subjectCode,
+                    academicType = candidate.academicType,
+                    candidateId = candidate.id,
+                    learningGoalId = candidate.learningGoalId,
                     reason = explain(candidate, range, prefs),
                 )
                 val left = (remaining[candidate.id] ?: 0) - choice.length
                 if (left <= 0) remaining.remove(candidate.id) else remaining[candidate.id] = left
                 workBudget -= choice.length
+                usedSoFar += choice.length
                 cursor += choice.length
                 runSinceBreak += choice.length
                 if (workBudget <= 0 && remaining.isNotEmpty()) ceilingHit = true
@@ -498,6 +639,8 @@ class DayPlanner {
         prefs: PlannerPreferences,
         available: Int,
         workBudget: Int,
+        protectedLeft: Int,
+        previousStarts: Map<String, List<Int>>,
     ): Choice? {
         val slot = TimeRange(cursor, cursor + available)
         val options = remaining.entries.sortedBy { it.key }.mapNotNull { (id, left) ->
@@ -509,6 +652,10 @@ class DayPlanner {
             val floor = minOf(candidate.minSession, left)
             if (floor <= 0 || available < floor || workBudget < floor) return@mapNotNull null
 
+            // Ordinary work may not eat the time kept for build and learning.
+            val budgetHere = if (candidate.urgent) workBudget else minOf(workBudget, protectedLeft)
+            if (budgetHere < floor) return@mapNotNull null
+
             // Some work cannot happen yet, whatever the day looks like.
             candidate.earliestStart?.let { if (cursor < it) return@mapNotNull null }
 
@@ -516,8 +663,8 @@ class DayPlanner {
             val cap = candidate.deadlineMinute?.let { it - cursor } ?: Int.MAX_VALUE
             if (cap < floor) return@mapNotNull null
 
-            val ceiling = if (candidate.splittable) candidate.maxSession else left
-            var length = minOf(left, ceiling, available, workBudget, cap)
+            val ceiling = if (candidate.splittable) sessionCeiling(candidate, prefs) else left
+            var length = minOf(left, ceiling, available, budgetHere, cap)
             length = prefs.roundDown(length)
             if (length < floor) length = floor
 
@@ -526,15 +673,28 @@ class DayPlanner {
             val remainder = left - length
             if (remainder in 1 until floor) {
                 val whole = left
-                if (whole <= available && whole <= workBudget && whole <= cap) length = whole
+                if (whole <= available && whole <= budgetHere && whole <= cap) length = whole
             }
 
-            if (length > available || length > workBudget || length > cap) return@mapNotNull null
+            if (length > available || length > budgetHere || length > cap) return@mapNotNull null
 
-            Choice(candidate, length, score(candidate, slot, prefs))
+            // Keep work where it already was when nothing ahead of it moved, so a replan does
+            // not reshuffle the evening for no visible reason.
+            val sticky = previousStarts[candidate.id]?.any { abs(it - cursor) <= STICKY_TOLERANCE } == true
+
+            Choice(candidate, length, score(candidate, slot, prefs) + if (sticky) STICKY_BONUS else 0)
         }
         return options.maxWithOrNull(compareBy({ it.score }, { it.candidate.id }))
     }
+
+    /** On a low-energy day sessions are shorter, so the same work comes in smaller pieces. */
+    private fun sessionCeiling(candidate: WorkCandidate, prefs: PlannerPreferences): Int =
+        if (prefs.energyMode == EnergyMode.LIGHT) {
+            prefs.roundDown((candidate.maxSession * LIGHT_SESSION_FACTOR).toInt())
+                .coerceAtLeast(candidate.minSession)
+        } else {
+            candidate.maxSession
+        }
 
     /**
      * Deterministic scoring. Higher wins. The components are deliberately coarse so that the
@@ -564,6 +724,7 @@ class DayPlanner {
         if (demanding) {
             if (prefs.peakWindow.contains(slot.start)) score += 14
             if (slot.start >= prefs.eveningFatigueAfter) score -= 22
+            if (prefs.energyMode == EnergyMode.LIGHT) score -= 10
         } else if (slot.start >= prefs.eveningFatigueAfter) {
             score += 8
         }
@@ -584,26 +745,34 @@ class DayPlanner {
     }
 
     private fun explain(candidate: WorkCandidate, range: TimeRange, prefs: PlannerPreferences): String {
-        val parts = mutableListOf<String>()
-        candidate.daysToDeadline?.let { d ->
-            parts += when {
-                d < 0 -> "overdue"
-                d == 0 -> "due today"
-                d == 1 -> "due tomorrow"
-                else -> "due in $d days"
+        val parts = candidate.reasons.toMutableList()
+        if (parts.none { it.contains("due") }) {
+            candidate.daysToDeadline?.let { d ->
+                parts += when {
+                    d < 0 -> "it is overdue"
+                    d == 0 -> "it is due today"
+                    d == 1 -> "it is due tomorrow"
+                    else -> "it is due in $d days"
+                }
             }
         }
-        if (candidate.priority.weight >= 22) parts += candidate.priority.label.lowercase() + " priority"
+        if (candidate.priority.weight >= 22) parts += "it is ${candidate.priority.label.lowercase()} priority"
         if (prefs.peakWindow.contains(range.start) &&
             (candidate.difficulty == Difficulty.HARD || candidate.energy == EnergyLevel.HIGH)
         ) {
-            parts += "placed in your sharpest hours"
+            parts += "these are your sharpest hours"
         }
         if (candidate.preferredWindow?.contains(range.start) == true) {
-            parts += "inside the window you asked for"
+            parts += "it is inside the time you prefer for it"
         }
         if (parts.isEmpty()) parts += "the day had room here"
-        return "Scheduled because it is " + parts.joinToString(", ") + "."
+        return "Scheduled because " + joinClauses(parts.distinct()) + "."
+    }
+
+    private fun joinClauses(parts: List<String>): String = when (parts.size) {
+        0 -> ""
+        1 -> parts[0]
+        else -> parts.dropLast(1).joinToString(", ") + " and " + parts.last()
     }
 
     private companion object {
@@ -613,5 +782,11 @@ class DayPlanner {
         const val MIN_BREAK = 5
         const val MIN_FREE_BLOCK = 15
         const val MIN_FRAGMENT = 10
+        const val MIN_REPORTED_SHORTFALL = 10
+        const val TRANSITION_RUN = 40
+        const val TRANSITION_BREAK = 10
+        const val STICKY_BONUS = 12
+        const val STICKY_TOLERANCE = 5
+        const val LIGHT_SESSION_FACTOR = 0.75f
     }
 }

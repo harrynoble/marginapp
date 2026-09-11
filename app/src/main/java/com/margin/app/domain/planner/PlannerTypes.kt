@@ -1,5 +1,6 @@
 package com.margin.app.domain.planner
 
+import com.margin.app.domain.model.AcademicType
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.Category
@@ -29,6 +30,7 @@ data class Commitment(
     val generatesReview: Boolean = false,
     /** Buffers derived from another commitment rather than declared by the user. */
     val derived: Boolean = false,
+    val academicType: AcademicType? = null,
 )
 
 sealed interface Candidate {
@@ -65,11 +67,37 @@ data class WorkCandidate(
     val splittable: Boolean = true,
     /** Extra weight the caller wants applied, for example a task pinned to today. */
     val importance: Int = 0,
-) : Candidate
+    val academicType: AcademicType? = null,
+    val learningGoalId: Long? = null,
+    /**
+     * Why this work wants time today, as short clauses ("you had this class today", "the exam
+     * is in 2 days"). They are built from real data and become the block's explanation.
+     */
+    val reasons: List<String> = emptyList(),
+) : Candidate {
 
-enum class QuotaKind { LEISURE, BUILD }
+    /**
+     * Work that may use time otherwise kept back for build and learning: due within a day,
+     * critical, or pressing for another reason such as an exam in the next few days.
+     */
+    val urgent: Boolean
+        get() = (daysToDeadline != null && daysToDeadline <= 1) ||
+            priority == Priority.CRITICAL ||
+            importance >= URGENT_IMPORTANCE
 
-/** Time reserved before work is placed, so that productivity cannot eat it. */
+    companion object {
+        const val URGENT_IMPORTANCE = 50
+    }
+}
+
+/**
+ * Leisure is reserved before any work so it cannot be eaten. Build and learning are placed
+ * after the academic work, in that order, and their time is held back from work that is not
+ * urgent.
+ */
+enum class QuotaKind { LEISURE, BUILD, LEARNING }
+
+/** Time set aside by kind rather than by task. */
 data class QuotaCandidate(
     override val id: String,
     override val minutes: Int,
@@ -79,6 +107,12 @@ data class QuotaCandidate(
     val minChunk: Int,
     val category: Category,
     val type: BlockType,
+    val subtitle: String? = null,
+    val projectId: Long? = null,
+    val learningGoalId: Long? = null,
+    /** Offered rather than imposed: the user is asked and can say not today. */
+    val optional: Boolean = false,
+    val reason: String? = null,
 ) : Candidate
 
 data class PlannerInput(
@@ -91,7 +125,10 @@ data class PlannerInput(
     val nowMinute: Int? = null,
     /** Blocks already completed, skipped or running today. Preserved verbatim. */
     val settled: List<PlacedBlock> = emptyList(),
-    /** The plan being revised. Used only to report what changed. */
+    /**
+     * The plan being revised. Used to report what changed and to keep work where it was
+     * when nothing ahead of it has moved.
+     */
     val previous: List<PlacedBlock> = emptyList(),
 )
 
@@ -111,6 +148,10 @@ data class PlacedBlock(
     val subjectCode: String? = null,
     val locked: Boolean = false,
     val reason: String? = null,
+    val academicType: AcademicType? = null,
+    val candidateId: String? = null,
+    val learningGoalId: Long? = null,
+    val optional: Boolean = false,
 ) {
     val start: Int get() = range.start
     val end: Int get() = range.end
@@ -159,6 +200,8 @@ data class PlannedDay(
     val leisureMinutes: Int get() = blocks.filter { it.type == BlockType.LEISURE }.sumOf { it.duration }
     val breakMinutes: Int get() = blocks.filter { it.type == BlockType.BREAK }.sumOf { it.duration }
     val freeMinutes: Int get() = blocks.filter { it.type == BlockType.FREE }.sumOf { it.duration }
+    val buildMinutes: Int get() = blocks.filter { it.type == BlockType.BUILD }.sumOf { it.duration }
+    val learningMinutes: Int get() = blocks.filter { it.type == BlockType.LEARN }.sumOf { it.duration }
 
     fun minutesIn(category: Category): Int =
         blocks.filter { it.category == category && it.type != BlockType.SLEEP }.sumOf { it.duration }

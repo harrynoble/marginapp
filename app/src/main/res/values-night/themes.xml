@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.Margin" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <!-- Ignored below API 27, where there are no display cutouts to lay out around. -->
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
         <item name="android:windowLightStatusBar">false</item>
+        <!-- The launch splash shows the white wordmark, so it sits on the brand's black. -->
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">#000000</item>
     </style>
 </resources>

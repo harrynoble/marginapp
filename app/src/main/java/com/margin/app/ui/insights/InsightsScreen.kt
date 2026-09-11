@@ -112,23 +112,114 @@ fun InsightsScreen(viewModel: InsightsViewModel, modifier: Modifier = Modifier) 
             }
 
             item(key = "work") {
-                InsightCard(title = "Work", accent = colors.tint, trailing = "Per day") {
+                val single = state.range == InsightsRange.TODAY
+                InsightCard(title = "Work", accent = colors.tint, trailing = if (single) null else "Per day") {
                     Text(
                         text = MarginTime.formatDuration(state.totalCompletedMinutes),
                         style = AppleType.numeral,
                         color = colors.label,
                     )
                     Text(
-                        text = "Finished on ${state.daysWithWork} of ${state.days.size} days",
+                        text = if (single) {
+                            "Done of " + MarginTime.formatDuration(state.days.sumOf { it.workMinutes }) + " planned"
+                        } else {
+                            "Finished on ${state.daysWithWork} of ${state.days.size} days"
+                        },
                         style = AppleType.subheadline,
                         color = colors.secondaryLabel,
                     )
-                    Spacer(Modifier.height(Space.l))
-                    DayChart(days = state.days)
-                    Spacer(Modifier.height(Space.m))
-                    Row(horizontalArrangement = Arrangement.spacedBy(Space.l)) {
-                        Legend(color = colors.tint, label = "Finished")
-                        Legend(color = colors.fill, label = "Planned")
+                    if (!single) {
+                        Spacer(Modifier.height(Space.l))
+                        DayChart(days = state.days)
+                        Spacer(Modifier.height(Space.m))
+                        Row(horizontalArrangement = Arrangement.spacedBy(Space.l)) {
+                            Legend(color = colors.tint, label = "Finished")
+                            Legend(color = colors.fill, label = "Planned")
+                        }
+                    }
+                }
+            }
+
+            if (state.balance.isNotEmpty()) {
+                item(key = "balance") {
+                    val total = state.balance.sumOf { it.minutes }
+                    InsightCard(title = "Day balance", accent = accents.green) {
+                        Text(text = MarginTime.formatDuration(total), style = AppleType.numeral, color = colors.label)
+                        Text(
+                            text = "Study, building, learning and rest, as they actually happened",
+                            style = AppleType.subheadline,
+                            color = colors.secondaryLabel,
+                        )
+                        Spacer(Modifier.height(Space.l))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(14.dp)
+                                .clip(MarginShape.capsule),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            state.balance.forEach { slice ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(slice.minutes.toFloat())
+                                        .fillMaxHeight()
+                                        .background(balanceColor(slice.kind)),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(Space.l))
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            state.balance.forEach { slice ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    ColorDot(color = balanceColor(slice.kind), size = 10.dp)
+                                    Spacer(Modifier.width(Space.s))
+                                    Text(slice.label, style = AppleType.subheadline, color = colors.label, modifier = Modifier.weight(1f))
+                                    Text(
+                                        text = MarginTime.formatDuration(slice.minutes),
+                                        style = AppleType.subheadline.copy(fontFeatureSettings = "tnum"),
+                                        color = colors.secondaryLabel,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.tracks.isNotEmpty()) {
+                item(key = "subjects") {
+                    InsightCard(title = "Subjects", accent = accents.indigo, trailing = "Planned · done") {
+                        Column(verticalArrangement = Arrangement.spacedBy(Space.m)) {
+                            state.tracks.forEach { track -> TrackRow(track) }
+                        }
+                    }
+                }
+            }
+
+            item(key = "learned") {
+                InsightCard(title = "What Margin has learned", accent = accents.purple) {
+                    if (state.estimates.isEmpty() && state.bestWindow == null) {
+                        Text(
+                            text = "After a few finished sessions, Margin learns how long things really take you and plans with that.",
+                            style = AppleType.subheadline,
+                            color = colors.secondaryLabel,
+                        )
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            state.bestWindow?.let { window ->
+                                LearnedRow(
+                                    label = "Best time to study",
+                                    detail = MarginTime.formatTime(window.start, false) + " – " + MarginTime.formatTime(window.end, false),
+                                )
+                            }
+                            state.estimates.forEach { LearnedRow(it.label, it.detail) }
+                        }
+                        Spacer(Modifier.height(Space.m))
+                        Text(
+                            text = "Planned times are adjusted by these amounts, within limits.",
+                            style = AppleType.footnote,
+                            color = colors.tertiaryLabel,
+                        )
                     }
                 }
             }
@@ -290,6 +381,68 @@ private fun InsightCard(
         }
         Spacer(Modifier.height(Space.s))
         content()
+    }
+}
+
+@Composable
+private fun balanceColor(kind: BalanceKind): Color {
+    val accents = MarginTheme.accents
+    return when (kind) {
+        BalanceKind.STUDY -> accents.indigo
+        BalanceKind.BUILD -> accents.orange
+        BalanceKind.LEARNING -> accents.teal
+        BalanceKind.LEISURE -> accents.green
+        BalanceKind.BREAKS -> accents.gray
+    }
+}
+
+@Composable
+private fun TrackRow(track: TrackInsight) {
+    val colors = MarginTheme.colors
+    val neglected = track.daysSince == null || track.daysSince >= NEGLECT_DAYS
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = track.name + " · " + track.track.type.label,
+                style = AppleType.subheadline,
+                color = colors.label,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = MarginTime.formatDurationShort(track.plannedMinutes) + " · " + MarginTime.formatDurationShort(track.actualMinutes),
+                style = AppleType.subheadline.copy(fontFeatureSettings = "tnum"),
+                color = colors.secondaryLabel,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        ProportionBar(
+            fraction = if (track.plannedMinutes <= 0) 0f else (track.actualMinutes.toFloat() / track.plannedMinutes).coerceIn(0f, 1f),
+            color = MarginTheme.accents.indigo,
+            height = 6.dp,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = when (val days = track.daysSince) {
+                null -> "Not studied yet"
+                0 -> "Studied today"
+                1 -> "Last studied yesterday"
+                else -> "Last studied $days days ago"
+            },
+            style = AppleType.footnote,
+            color = if (neglected) colors.warning else colors.secondaryLabel,
+        )
+    }
+}
+
+private const val NEGLECT_DAYS = 4
+
+@Composable
+private fun LearnedRow(label: String, detail: String) {
+    val colors = MarginTheme.colors
+    Column {
+        Text(text = label, style = AppleType.subheadline, color = colors.label)
+        Text(text = detail, style = AppleType.footnote, color = colors.secondaryLabel)
     }
 }
 

@@ -2,12 +2,19 @@ package com.margin.app.ai
 
 import com.margin.app.ai.context.ContextBuilder
 import com.margin.app.ai.context.Prompts
+import com.margin.app.core.MarginTime
 import com.margin.app.data.db.dao.AiInteractionDao
 import com.margin.app.data.db.entity.AiInteractionEntity
 import com.margin.app.data.prefs.AiSettingsRepository
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.repository.ExamRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
+import com.margin.app.data.repository.TimetableRepository
+import com.margin.app.domain.model.BlockStatus
+import com.margin.app.domain.model.BlockType
+import com.margin.app.domain.model.DayState
+import com.margin.app.domain.model.ScheduleBlock
 import com.margin.app.domain.planner.EnergyMode
 import com.margin.app.domain.usecase.PlanningService
 import com.margin.app.domain.usecase.ScheduleActions
@@ -27,15 +34,21 @@ data class AssistantResult(
 )
 
 /**
- * The one path from a typed sentence to a changed plan:
- * understand, validate, apply, replan. Each step can fail independently and none of them can
- * put unvalidated model output into the database.
+ * The one path from a typed sentence to a changed plan: understand, validate, apply, replan.
+ * Each step can fail independently and none of them can put unvalidated model output into the
+ * database.
+ *
+ * Cost stays low by design: sentences the offline parser understands never reach the model,
+ * and those that do carry only the context sections they need. Questions about the plan
+ * ("what now", "why") are answered from the plan itself.
  */
 class AssistantService(
     private val aiSettingsRepository: AiSettingsRepository,
     private val preferencesRepository: PreferencesRepository,
     private val taskRepository: TaskRepository,
     private val scheduleRepository: ScheduleRepository,
+    private val timetableRepository: TimetableRepository,
+    private val examRepository: ExamRepository,
     private val planningService: PlanningService,
     private val scheduleActions: ScheduleActions,
     private val contextBuilder: ContextBuilder,
@@ -47,6 +60,7 @@ class AssistantService(
     private val validator = CommandValidator(
         taskExists = { id -> taskRepository.task(id) != null },
         blockExists = { id -> scheduleRepository.block(id) != null },
+        subjects = { timetableRepository.subjects() },
     )
 
     suspend fun submit(input: String, now: LocalDateTime = LocalDateTime.now()): AssistantResult {
@@ -58,25 +72,20 @@ class AssistantService(
         val today = now.toLocalDate()
         val settings = aiSettingsRepository.current()
         val provider = AiProviderFactory.create(settings)
+        val local = LocalCommandParser.parse(text, today)
 
-        val understanding: Understanding = if (provider == null) {
-            val local = LocalCommandParser.parse(text, today)
-            Understanding(local.commands, local.reply, AssistantSource.LOCAL, null)
-        } else {
-            val prefs = preferencesRepository.current()
-            val context = contextBuilder.build(now, prefs, settings.shareScheduleDetail)
-            when (val outcome = provider.complete(Prompts.SYSTEM, context + "\n\nUser: " + text)) {
-                is AiOutcome.Success -> parseModelOutput(outcome.text, text, today)
-                is AiOutcome.Failure -> {
-                    // Falling back keeps the bar useful when the network or the key is not.
-                    val local = LocalCommandParser.parse(text, today)
-                    Understanding(
+        val understanding: Understanding = when {
+            // Clear, single-intent sentences are handled on the device and never sent anywhere.
+            provider == null || (local.commands.isNotEmpty() && isSimple(text)) ->
+                Understanding(local.commands, local.reply, AssistantSource.LOCAL, null)
+            else -> {
+                val prefs = preferencesRepository.current()
+                val context = contextBuilder.build(now, prefs, settings.shareScheduleDetail, text)
+                when (val outcome = provider.complete(Prompts.SYSTEM, context + "\n\nUser: " + text)) {
+                    is AiOutcome.Success -> parseModelOutput(outcome.text, local)
+                    is AiOutcome.Failure -> Understanding(
                         commands = local.commands,
-                        reply = if (local.commands.isEmpty()) {
-                            outcome.message + " " + local.reply
-                        } else {
-                            local.reply
-                        },
+                        reply = if (local.commands.isEmpty()) "AI unavailable. " + outcome.message + " " + local.reply else local.reply,
                         source = AssistantSource.LOCAL,
                         error = outcome.message,
                     )
@@ -86,11 +95,18 @@ class AssistantService(
 
         val validation = validator.validate(understanding.commands, today)
         val applied = mutableListOf<String>()
+        val answers = mutableListOf<String>()
         val datesToReplan = linkedSetOf<LocalDate>()
 
         for (command in validation.commands) {
             runCatching { apply(command, today, now, datesToReplan) }
-                .onSuccess { applied += command.summary }
+                .onSuccess { outcome ->
+                    when (outcome) {
+                        is Applied.Done -> applied += outcome.summary ?: command.summary
+                        is Applied.Answer -> answers += outcome.text
+                        is Applied.Refused -> answers += outcome.text
+                    }
+                }
                 .onFailure { applied += "Could not apply: " + command.summary }
         }
 
@@ -98,10 +114,14 @@ class AssistantService(
             runCatching { planningService.replan(date, now) }
         }
 
+        val reply = when {
+            answers.isNotEmpty() -> answers.joinToString(" ")
+            understanding.reply.isNotBlank() -> understanding.reply
+            applied.isEmpty() -> "Nothing needed changing."
+            else -> "Done."
+        }
         val result = AssistantResult(
-            reply = understanding.reply.ifBlank {
-                if (applied.isEmpty()) "Nothing needed changing." else "Done."
-            },
+            reply = reply,
             applied = applied,
             rejected = validation.rejections.map { it.reason },
             source = understanding.source,
@@ -134,32 +154,31 @@ class AssistantService(
         val error: String?,
     )
 
+    private sealed interface Applied {
+        data class Done(val summary: String? = null) : Applied
+        data class Answer(val text: String) : Applied
+        data class Refused(val text: String) : Applied
+    }
+
+    /** One clear request, not several joined together; safe to handle without the model. */
+    private fun isSimple(text: String): Boolean {
+        val lower = " " + text.lowercase() + " "
+        val joined = listOf(" and ", " but ", " also ", " then ", ";", " plus ").any { lower.contains(it) }
+        return !joined && text.length <= SIMPLE_LENGTH
+    }
+
     /**
      * Models sometimes wrap JSON in prose or fences. Recover what we can; if the payload is
      * unusable, fall back to the local parser rather than showing the user a parse error.
      */
-    private fun parseModelOutput(raw: String, userText: String, today: LocalDate): Understanding {
-        val payload = extractJsonObject(raw)
-        if (payload == null) {
-            val local = LocalCommandParser.parse(userText, today)
-            return Understanding(
-                local.commands,
-                local.reply,
-                AssistantSource.LOCAL,
-                "The assistant replied in an unexpected format.",
-            )
-        }
+    private fun parseModelOutput(raw: String, local: LocalCommandParser.Parsed): Understanding {
+        val payload = JsonText.firstObject(raw)
+            ?: return Understanding(local.commands, local.reply, AssistantSource.LOCAL, "The assistant replied in an unexpected format.")
         return try {
             val dto = json.decodeFromString<AiResponseDto>(payload)
             Understanding(dto.commands, dto.reply.trim(), AssistantSource.MODEL, null)
         } catch (e: Exception) {
-            val local = LocalCommandParser.parse(userText, today)
-            Understanding(
-                local.commands,
-                local.reply,
-                AssistantSource.LOCAL,
-                "The assistant reply could not be read.",
-            )
+            Understanding(local.commands, local.reply, AssistantSource.LOCAL, "The assistant reply could not be read.")
         }
     }
 
@@ -168,7 +187,7 @@ class AssistantService(
         today: LocalDate,
         now: LocalDateTime,
         replanDates: MutableSet<LocalDate>,
-    ) {
+    ): Applied {
         when (command) {
             is ValidatedCommand.CreateTask -> {
                 taskRepository.create(command.task)
@@ -181,7 +200,7 @@ class AssistantService(
             }
 
             is ValidatedCommand.UpdateTask -> {
-                val task = taskRepository.task(command.taskId) ?: return
+                val task = taskRepository.task(command.taskId) ?: return Applied.Refused("That task no longer exists.")
                 taskRepository.update(
                     task.copy(
                         title = command.title ?: task.title,
@@ -208,30 +227,21 @@ class AssistantService(
                 replanDates += today
             }
 
-            is ValidatedCommand.MoveBlock -> {
-                scheduleActions.reschedule(
-                    blockId = command.blockId,
-                    toDate = command.date,
-                    toStart = command.startMinute,
-                    reason = "You asked for it to move.",
-                    now = now,
-                )
-            }
+            is ValidatedCommand.MoveBlock -> scheduleActions.reschedule(
+                blockId = command.blockId,
+                toDate = command.date,
+                toStart = command.startMinute,
+                reason = "You asked for it to move.",
+                now = now,
+            )
 
-            is ValidatedCommand.SkipBlock -> {
-                scheduleActions.skip(command.blockId, command.resolution, command.reason, now)
-            }
+            is ValidatedCommand.SkipBlock -> scheduleActions.skip(command.blockId, command.resolution, command.reason, now)
 
-            is ValidatedCommand.TakeBreak -> {
-                scheduleActions.takeBreak(command.minutes, now)
-            }
+            is ValidatedCommand.TakeBreak -> scheduleActions.takeBreak(command.minutes, now)
 
             is ValidatedCommand.SetEnergy -> {
                 preferencesRepository.update {
-                    it.copy(
-                        energyMode = command.mode,
-                        energyModeDate = command.date.toEpochDay(),
-                    )
+                    it.copy(energyMode = command.mode, energyModeDate = command.date.toEpochDay())
                 }
                 replanDates += command.date
             }
@@ -243,29 +253,110 @@ class AssistantService(
 
             is ValidatedCommand.SetBuildTarget -> {
                 preferencesRepository.update {
-                    if (command.weekend) {
-                        it.copy(buildMinutesWeekend = command.minutes)
-                    } else {
-                        it.copy(buildMinutesWeekday = command.minutes)
-                    }
+                    if (command.weekend) it.copy(buildMinutesWeekend = command.minutes)
+                    else it.copy(buildMinutesWeekday = command.minutes)
                 }
                 replanDates += today
             }
 
             is ValidatedCommand.Replan -> replanDates += command.date
+
+            is ValidatedCommand.GoOut -> {
+                val result = scheduleActions.goOut(command.backMinute, now)
+                return Applied.Answer(result.message)
+            }
+
+            is ValidatedCommand.LightenDay -> scheduleActions.lightenToday(
+                date = today,
+                essentials = command.essentialSubjects.map { DayState.subjectKey(it) }.toSet(),
+                priorities = command.essentialSubjects,
+                dropBuild = command.dropBuild,
+                dropLearning = command.dropLearning,
+                lowEnergy = false,
+                now = now,
+            )
+
+            is ValidatedCommand.MinimumDay -> scheduleActions.setMinimumDay(today, true, now)
+
+            is ValidatedCommand.SetBuildToday ->
+                scheduleActions.setBuildDecision(today, command.decision, minutes = command.minutes, now = now)
+
+            is ValidatedCommand.SetLearningToday ->
+                scheduleActions.setLearningDecision(today, command.decision, minutes = command.minutes, now = now)
+
+            is ValidatedCommand.ExcludeSubject -> {
+                val result = scheduleActions.excludeSubjectToday(today, command.subjectCode, now)
+                val note = result.notes.firstOrNull { it.contains(timetableRepository.subject(command.subjectCode)?.name ?: command.subjectCode) }
+                return Applied.Done(note ?: command.summary)
+            }
+
+            is ValidatedCommand.ExtendCurrent -> {
+                val active = scheduleRepository.activeBlock()
+                    ?: return Applied.Refused("Nothing is running right now. Start a session and I'll keep it going.")
+                scheduleActions.continueSession(active.id, command.minutes, now)
+                return Applied.Done("Added ${MarginTime.formatDuration(command.minutes)} to ${active.title}")
+            }
+
+            is ValidatedCommand.AddExam -> {
+                examRepository.upsert(command.exam)
+                replanDates += today
+            }
+
+            is ValidatedCommand.MissedSession -> {
+                val nowMinute = MarginTime.nowMinute(now)
+                val overdue = scheduleRepository.blocksFor(today)
+                    .filter { it.status == BlockStatus.PLANNED && it.type.isWork && it.start <= nowMinute }
+                    .maxByOrNull { it.start }
+                    ?: return Applied.Refused("No session is overdue right now.")
+                scheduleActions.markMissed(overdue.id, "You said you missed it.", now)
+                return Applied.Done("Recorded ${overdue.title} as missed. Its work goes back into the day where it fits.")
+            }
+
+            is ValidatedCommand.WhatNow -> return Applied.Answer(whatNow(now))
+
+            is ValidatedCommand.Explain -> return Applied.Answer(explain(command.blockId, now))
+        }
+        return Applied.Done()
+    }
+
+    /** "What should I do now?", answered from the plan with nothing invented. */
+    suspend fun whatNow(now: LocalDateTime = LocalDateTime.now()): String {
+        val prefs = preferencesRepository.current()
+        val use24 = prefs.use24HourTime
+        val nowMinute = MarginTime.nowMinute(now)
+        val blocks = scheduleRepository.blocksFor(now.toLocalDate()).sortedBy { it.start }
+        val active = blocks.firstOrNull { it.status == BlockStatus.ACTIVE }
+        if (active != null) {
+            val left = (active.end - nowMinute).coerceAtLeast(0)
+            return "You're on ${active.title}, ${MarginTime.formatDuration(left)} left, until ${MarginTime.formatTime(active.end, use24)}."
+        }
+        val current = blocks.firstOrNull { it.status == BlockStatus.PLANNED && nowMinute in it.start until it.end && it.type != BlockType.SLEEP }
+        val next = blocks.firstOrNull { it.status == BlockStatus.PLANNED && it.start > nowMinute && it.type != BlockType.FREE && it.type != BlockType.SLEEP }
+        return when {
+            current != null && current.type.isWork ->
+                "Now: ${current.title}, until ${MarginTime.formatTime(current.end, use24)}. Start it when you're ready."
+            current != null && (current.type == BlockType.FREE || current.type == BlockType.LEISURE) ->
+                "This is free time" + (next?.let { ", until ${it.title} at ${MarginTime.formatTime(it.start, use24)}." } ?: ". Nothing else is planned.")
+            current != null -> "Now: ${current.title}, until ${MarginTime.formatTime(current.end, use24)}." +
+                (next?.let { " Then ${it.title}." } ?: "")
+            next != null -> "Nothing right now. Next is ${next.title} at ${MarginTime.formatTime(next.start, use24)}."
+            else -> "Nothing else is planned today. The rest of the time is yours."
         }
     }
 
-    /** Explains a scheduled block using the stored reason, never an invented one. */
-    suspend fun explain(blockId: Long): String {
-        val block = scheduleRepository.block(blockId)
-            ?: return "That is no longer on the schedule."
+    /** Explains a block using the reason the planner stored when it placed it, never an invented one. */
+    suspend fun explain(blockId: Long?, now: LocalDateTime = LocalDateTime.now()): String {
+        val nowMinute = MarginTime.nowMinute(now)
+        val block: ScheduleBlock = (blockId?.let { scheduleRepository.block(it) })
+            ?: scheduleRepository.blocksFor(now.toLocalDate())
+                .filter { it.type.isWork && it.status.isOpen && it.end > nowMinute }
+                .minByOrNull { it.start }
+            ?: return "There's nothing planned to explain right now."
         val reason = block.reason
         return if (reason.isNullOrBlank()) {
-            "It sits at " + com.margin.app.core.MarginTime.formatTime(block.start, true) +
-                " because that is where the day had room for it."
+            "${block.title} sits at ${MarginTime.formatTime(block.start, true)} because that's where the day had room for it."
         } else {
-            reason
+            "${block.title}: " + reason.replaceFirstChar { it.lowercase() }
         }
     }
 
@@ -275,28 +366,6 @@ class AssistantService(
     }
 
     private companion object {
-        /** Pulls the first balanced JSON object out of a response, fences and prose included. */
-        fun extractJsonObject(raw: String): String? {
-            val start = raw.indexOf('{')
-            if (start < 0) return null
-            var depth = 0
-            var inString = false
-            var escaped = false
-            for (index in start until raw.length) {
-                val ch = raw[index]
-                when {
-                    escaped -> escaped = false
-                    ch == '\\' && inString -> escaped = true
-                    ch == '"' -> inString = !inString
-                    inString -> Unit
-                    ch == '{' -> depth++
-                    ch == '}' -> {
-                        depth--
-                        if (depth == 0) return raw.substring(start, index + 1)
-                    }
-                }
-            }
-            return null
-        }
+        const val SIMPLE_LENGTH = 90
     }
 }

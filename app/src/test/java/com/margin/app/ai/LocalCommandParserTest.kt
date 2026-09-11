@@ -90,8 +90,14 @@ class LocalCommandParserTest {
     }
 
     @Test
-    fun `asking what to do rebuilds the day`() {
+    fun `asking what to do is answered from the plan`() {
         val parsed = LocalCommandParser.parse("what should I do now", monday)
+        assertEquals(AiActions.WHAT_NOW, parsed.commands.single().action)
+    }
+
+    @Test
+    fun `asking to rebuild the day replans`() {
+        val parsed = LocalCommandParser.parse("replan my afternoon", monday)
         assertEquals(AiActions.REPLAN, parsed.commands.single().action)
     }
 

@@ -31,47 +31,51 @@ import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.Space
 
 /**
- * The evening review. Three questions at most and every one optional: the point is to decide
- * what carries forward, not to fill in a form.
+ * The end-of-day review. What happened, in real minutes; then at most three questions, every
+ * one optional. The point is to decide what carries forward, not to fill in a form.
  */
 @Composable
 fun CheckInSheet(
     blocks: List<ScheduleBlock>,
     onDismiss: () -> Unit,
-    onSave: (energy: Int?, note: String?, carryForward: Boolean) -> Unit,
+    onSave: (energy: Int?, note: String?, carryForward: Boolean, workload: Int?) -> Unit,
 ) {
     val colors = MarginTheme.colors
+    val accents = MarginTheme.accents
     var energy by remember { mutableStateOf<Int?>(null) }
+    var workload by remember { mutableStateOf<Int?>(null) }
     var note by remember { mutableStateOf("") }
     var carryForward by remember { mutableStateOf(true) }
 
-    val finished = blocks.filter { it.status == BlockStatus.DONE && it.type != BlockType.SLEEP }
-    val skipped = blocks.filter { it.status == BlockStatus.SKIPPED }
-    val unfinished = blocks.filter { it.status == BlockStatus.PLANNED && it.type.isWork }
-    val worked = finished
-        .filter { it.type.isWork }
-        .sumOf { if (it.elapsedMinutes > 0) it.elapsedMinutes else it.duration }
+    val worked = blocks.filter { it.status.isWorked && it.type != BlockType.SLEEP }
+    val skipped = blocks.filter { (it.status == BlockStatus.SKIPPED || it.status == BlockStatus.MISSED) && it.type.isWork }
+    val rescheduled = blocks.count { it.status == BlockStatus.RESCHEDULED }
+    val unfinished = blocks.filter { it.status.isOpen && it.type.isWork }
+
+    fun minutes(filter: (ScheduleBlock) -> Boolean) =
+        worked.filter(filter).sumOf { if (it.elapsedMinutes > 0) it.elapsedMinutes else it.duration }
+
+    val totals = listOf(
+        Triple("Study", minutes { it.isAcademic }, accents.indigo),
+        Triple("Build", minutes { it.type == BlockType.BUILD }, accents.orange),
+        Triple("Learning", minutes { it.type == BlockType.LEARN }, accents.teal),
+        Triple("Leisure", minutes { it.type == BlockType.LEISURE }, accents.green),
+    ).filter { it.second > 0 }
 
     MarginSheet(
         onDismiss = onDismiss,
         title = "Your Day",
         trailingText = "Save",
-        onTrailing = { onSave(energy, note.trim().ifBlank { null }, carryForward) },
+        onTrailing = { onSave(energy, note.trim().ifBlank { null }, carryForward, workload) },
     ) {
         Row(
             modifier = Modifier.padding(horizontal = Space.gutter, vertical = Space.s),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             StatTile(
-                value = MarginTime.formatDurationShort(worked),
-                label = "Worked",
+                value = worked.count { it.type.isWork }.toString(),
+                label = "Completed",
                 accent = colors.positive,
-                modifier = Modifier.weight(1f),
-            )
-            StatTile(
-                value = finished.size.toString(),
-                label = "Finished",
-                accent = colors.tint,
                 modifier = Modifier.weight(1f),
             )
             StatTile(
@@ -80,14 +84,31 @@ fun CheckInSheet(
                 accent = colors.secondaryLabel,
                 modifier = Modifier.weight(1f),
             )
+            StatTile(
+                value = rescheduled.toString(),
+                label = "Moved",
+                accent = colors.tint,
+                modifier = Modifier.weight(1f),
+            )
         }
 
+        if (totals.isNotEmpty()) {
+            GroupedSection(header = "Time spent") {
+                totals.forEachIndexed { index, (label, total, _) ->
+                    if (index > 0) RowSeparator()
+                    GroupedRow(title = label, value = MarginTime.formatDuration(total))
+                }
+            }
+        }
+
+        val finished = worked.filter { it.type.isWork }
         if (finished.isNotEmpty()) {
             GroupedSection(header = "Finished") {
                 finished.take(8).forEachIndexed { index, block ->
                     if (index > 0) RowSeparator(inset = 52.dp)
                     GroupedRow(
                         title = block.title,
+                        subtitle = block.academicType?.label,
                         leading = {
                             Icon(
                                 Icons.Rounded.CheckCircle,
@@ -102,11 +123,12 @@ fun CheckInSheet(
         }
 
         if (skipped.isNotEmpty()) {
-            GroupedSection(header = "Skipped") {
+            GroupedSection(header = "Not done", footer = "Nothing here is lost. Academic work comes back on a later day.") {
                 skipped.take(6).forEachIndexed { index, block ->
                     if (index > 0) RowSeparator(inset = 52.dp)
                     GroupedRow(
                         title = block.title,
+                        subtitle = block.status.label,
                         titleColor = colors.secondaryLabel,
                         leading = {
                             Icon(
@@ -119,6 +141,15 @@ fun CheckInSheet(
                     )
                 }
             }
+        }
+
+        GroupedSection(header = "Was today too much?") {
+            OptionChips(
+                options = WorkloadLabels.indices.toList(),
+                selected = workload?.minus(1),
+                label = { WorkloadLabels[it] },
+                onSelect = { index -> workload = if (workload == index + 1) null else index + 1 },
+            )
         }
 
         GroupedSection(header = "How was your energy") {
@@ -143,7 +174,7 @@ fun CheckInSheet(
         if (unfinished.isNotEmpty()) {
             GroupedSection(
                 modifier = Modifier.padding(top = Space.xl),
-                footer = "${unfinished.size} still planned for today.",
+                footer = "${unfinished.size} still planned for today. Carried work is capped, so tomorrow stays realistic.",
             ) {
                 GroupedRow(
                     title = "Carry unfinished work forward",
@@ -154,4 +185,5 @@ fun CheckInSheet(
     }
 }
 
+private val WorkloadLabels = listOf("Too light", "About right", "Too much")
 private val EnergyLabels = listOf("Drained", "Low", "Okay", "Good", "Sharp")

@@ -14,6 +14,22 @@ Android app honestly can. The rules that matter most:
 - **Out of the way.** The timetable is set up once and then folded into a single "College"
   line. Individual classes are never listed on Today or Plan and never announced.
 
+## Brand
+
+The logo is the wordmark **margin.** — lowercase, white on pure black, with the full stop in
+amber (`#F5A524`) as the only colour. It is drawn as geometry in
+`res/drawable/ic_launcher_foreground.xml`, not set in a font:
+
+- a heavy geometric sans: strokes about a quarter of the x-height, true-circle bowls
+- single-storey `a` and `g`, each closed by a straight stem; the `g` ends in a short hook
+- flat stem ends at the x-height and baseline; the `r` shoulder ends in a vertical cut
+- tight, even spacing, with the full stop tucked close to the `n` and slightly larger than
+  a stroke
+
+The launcher icon centres the whole wordmark inside the adaptive icon's safe circle on a
+black ground. The status-bar icon, which must be a flat silhouette and is too small for the
+full word, is `m.` in the same geometry.
+
 ## Liquid Glass
 
 `ui/glass` renders glass without a library (the toolchain predates Haze 1.7 / 2.x):
@@ -85,14 +101,32 @@ screen underneath; tabs cross-fade. The focus ring counts down to the second.
 
 ## Screens
 
-- **Today** — the sky, a hero Now card, quick actions, then the day by part (Morning,
-  Afternoon, Evening) with college as one line.
+- **Today** — the sky, a hero Now card, four quick actions (Lighten today, Take a break,
+  Energy, I'm out), at most one card per decision (exam mode, minimum day, build offer,
+  learning offer), then the day by part with college as one line. The Now card changes shape
+  with the moment: ready (Start), running (Finish, Pause), paused (Resume), late to start
+  (Start now, I'm out, Later, Skip today) and past its planned end (Move to next, Continue).
+  Nothing is shown until the day has loaded, and after bedtime the screen stops asking for
+  decisions: it says the day is over and that anything missed carries to tomorrow.
+- **Sheets** — Lighten (what must happen, priorities, drop build or learning), Out (later
+  today, tonight, tomorrow, a chosen time), and the build and learning offers, where "Not
+  today" sits where Cancel would.
 - **Plan** — a Calendar-style day grid with a week strip and a red now-line. Tap empty time
   to add an event there.
-- **Tasks** — Reminders-style: completion rings, `!!` priority, grouped by due date.
-- **Insights** — Health-style cards: coloured label, one big number, one chart.
-- **Settings** — iOS Settings with coloured icon tiles; the timetable lives here.
-- **Focus** — always dark, lit by the colour of the work, clear glass controls.
+- **Tasks** — Reminders-style: completion rings, `!!` priority, grouped by due date; projects
+  and learning goals below.
+- **Exams** — the exam timetable: countdowns, theory or lab, import from a photo or PDF with
+  a review step before anything is saved.
+- **Insights** — Health-style cards: follow-through, work, day balance, every subject's
+  theory and lab with planned against done and when it was last studied, and what Margin has
+  learned about how long things take.
+- **Settings** — iOS Settings with coloured icon tiles: study, revision, build, learning,
+  leisure, each notification on its own switch, appearance, the timetable and exams, data.
+- **Focus** — always dark, lit by the colour of the work, clear glass controls. At the
+  planned end it offers the next session or more time rather than stopping the clock, and it
+  suggests a break once the real run of work has earned one.
+
+No emoji, no streaks, no guilt: a declined offer is never mentioned again that day.
 
 ## Components
 

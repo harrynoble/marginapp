@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Construction
 import androidx.compose.material.icons.rounded.Coffee
@@ -48,7 +50,9 @@ fun iconFor(type: BlockType): ImageVector = when (type) {
     BlockType.CLASS -> Icons.Rounded.School
     BlockType.TASK -> Icons.Rounded.TaskAlt
     BlockType.REVIEW -> Icons.AutoMirrored.Rounded.MenuBook
+    BlockType.STUDY -> Icons.Rounded.AutoStories
     BlockType.BUILD -> Icons.Rounded.Construction
+    BlockType.LEARN -> Icons.Rounded.Lightbulb
     BlockType.BREAK -> Icons.Rounded.Coffee
     BlockType.MEAL -> Icons.Rounded.Restaurant
     BlockType.COMMUTE -> Icons.AutoMirrored.Rounded.DirectionsWalk
@@ -64,7 +68,9 @@ fun labelFor(type: BlockType): String = when (type) {
     BlockType.CLASS -> "Class"
     BlockType.TASK -> "Task"
     BlockType.REVIEW -> "Review"
+    BlockType.STUDY -> "Study"
     BlockType.BUILD -> "Build"
+    BlockType.LEARN -> "Learning"
     BlockType.BREAK -> "Break"
     BlockType.MEAL -> "Meal"
     BlockType.COMMUTE -> "Travel"

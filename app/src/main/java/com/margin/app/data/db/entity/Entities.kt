@@ -1,5 +1,6 @@
 package com.margin.app.data.db.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -8,6 +9,9 @@ import androidx.room.PrimaryKey
 /*
  * Dates are epoch days and times are minutes from midnight. Enums are stored as their
  * stable string keys rather than ordinals so that reordering an enum cannot corrupt data.
+ *
+ * Columns added in version 2 carry an explicit default so the automatic migration can add
+ * them to existing rows; see MarginDatabase.
  */
 
 @Entity(tableName = "subjects")
@@ -18,6 +22,8 @@ data class SubjectEntity(
     val reviewWeight: Float = 1f,
     val colorIndex: Int = 0,
     val active: Boolean = true,
+    @ColumnInfo(defaultValue = "0") val importance: Int = 0,
+    @ColumnInfo(defaultValue = "moderate") val difficulty: String = "moderate",
 )
 
 @Entity(
@@ -73,6 +79,29 @@ data class ProjectEntity(
     val colorIndex: Int = 0,
     val targetMinutesPerWeek: Int = 0,
     val active: Boolean = true,
+    val notes: String? = null,
+)
+
+@Entity(tableName = "learning_goals")
+data class LearningGoalEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val weeklyTargetMinutes: Int = 0,
+    val sessionMinutes: Int = 30,
+    val active: Boolean = true,
+    val pauseDuringExams: Boolean = true,
+    val notes: String? = null,
+)
+
+@Entity(tableName = "exams", indices = [Index("date")])
+data class ExamEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val subjectCode: String?,
+    val title: String,
+    val date: Long,
+    val startMinute: Int? = null,
+    val endMinute: Int? = null,
+    val academicType: String = "theory",
     val notes: String? = null,
 )
 
@@ -168,8 +197,15 @@ data class ScheduleBlockEntity(
     val elapsedMinutes: Int = 0,
     val reason: String? = null,
     val planVersion: Int = 0,
-    /** Stable identity across replans, so a moved block keeps its history. */
+    /** The planner candidate the block came from. Stable across replans and sessions. */
     val planKey: String = "",
+    val academicType: String? = null,
+    @ColumnInfo(defaultValue = "0") val extendedMinutes: Int = 0,
+    @ColumnInfo(defaultValue = "0") val optional: Boolean = false,
+    val learningGoalId: Long? = null,
+    val plannedStart: Int? = null,
+    @ColumnInfo(defaultValue = "0") val plannedMinutes: Int = 0,
+    val skipResolution: String? = null,
 )
 
 @Entity(tableName = "daily_plans")
@@ -180,6 +216,11 @@ data class DailyPlanEntity(
     val headline: String? = null,
     val energyNote: String? = null,
     val energyMode: String = "normal",
+    /** The work the last plan intended, as JSON. Used to carry missed work forward. */
+    val workJson: String? = null,
+    val mode: String? = null,
+    /** Plain notes about the day's decisions, one per line. */
+    val notes: String? = null,
 )
 
 @Entity(tableName = "check_ins")
@@ -190,6 +231,51 @@ data class DailyCheckInEntity(
     val unexpected: String? = null,
     val carryForward: Boolean = true,
     val completedAt: Long = 0,
+    val workload: Int? = null,
+)
+
+/** Choices the user made about one day. One row per date, created on first choice. */
+@Entity(tableName = "day_states")
+data class DayStateEntity(
+    @PrimaryKey val date: Long,
+    val lightDay: Boolean = false,
+    val essentials: String = "",
+    val prioritySubjects: String = "",
+    val excludedSubjects: String = "",
+    val buildDecision: String = "unasked",
+    val buildProjectId: Long? = null,
+    val buildMinutes: Int? = null,
+    val learningDecision: String = "unasked",
+    val learningGoalId: Long? = null,
+    val learningMinutes: Int? = null,
+    val minimumDay: Boolean = false,
+    val minimumDayDismissed: Boolean = false,
+    val outUntilMinute: Int? = null,
+)
+
+@Entity(
+    tableName = "deferred_work",
+    indices = [Index(value = ["toDate", "sourceKey"], unique = true), Index("toDate")],
+)
+data class DeferredWorkEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sourceKey: String,
+    val fromDate: Long,
+    val toDate: Long,
+    val subjectCode: String? = null,
+    val academicType: String? = null,
+    val title: String,
+    val minutes: Int,
+    val reason: String,
+    val consumed: Boolean = false,
+)
+
+/** What has been posted today, so no nudge is ever posted twice. */
+@Entity(tableName = "nudge_log", primaryKeys = ["date", "key"])
+data class NudgeLogEntity(
+    val date: Long,
+    val key: String,
+    val at: Long,
 )
 
 @Entity(tableName = "completion_records", indices = [Index("date"), Index("taskId")])
@@ -202,6 +288,14 @@ data class CompletionRecordEntity(
     val type: String,
     val minutes: Int,
     val at: Long,
+    val subjectCode: String? = null,
+    val academicType: String? = null,
+    @ColumnInfo(defaultValue = "0") val plannedMinutes: Int = 0,
+    val startMinute: Int? = null,
+    val projectId: Long? = null,
+    val learningGoalId: Long? = null,
+    @ColumnInfo(defaultValue = "0") val extendedMinutes: Int = 0,
+    val title: String? = null,
 )
 
 @Entity(tableName = "skip_records", indices = [Index("date"), Index("taskId")])
@@ -214,6 +308,13 @@ data class SkipRecordEntity(
     val reason: String? = null,
     val resolution: String,
     val at: Long,
+    @ColumnInfo(defaultValue = "skipped") val kind: String = "skipped",
+    val subjectCode: String? = null,
+    val academicType: String? = null,
+    val plannedStart: Int? = null,
+    @ColumnInfo(defaultValue = "0") val plannedMinutes: Int = 0,
+    val category: String? = null,
+    val type: String? = null,
 )
 
 @Entity(tableName = "reschedule_records", indices = [Index("date"), Index("taskId")])
@@ -227,6 +328,17 @@ data class RescheduleRecordEntity(
     val toDate: Long,
     val toStart: Int,
     val reason: String? = null,
+    val at: Long,
+)
+
+@Entity(tableName = "break_records", indices = [Index("date")])
+data class BreakRecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val date: Long,
+    val startMinute: Int,
+    val plannedMinutes: Int,
+    val actualMinutes: Int,
+    val reason: String,
     val at: Long,
 )
 

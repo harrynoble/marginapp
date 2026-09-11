@@ -2,37 +2,37 @@ package com.margin.app.domain.usecase
 
 import com.margin.app.core.MarginTime
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.repository.DayRepository
+import com.margin.app.data.repository.ExamRepository
+import com.margin.app.data.repository.GoalRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
 import com.margin.app.data.repository.TimetableRepository
+import com.margin.app.domain.model.BlockStateMachine
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
-import com.margin.app.domain.model.Category
-import com.margin.app.domain.model.Difficulty
-import com.margin.app.domain.model.EnergyLevel
-import com.margin.app.domain.model.Priority
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.domain.model.SkipKind
+import com.margin.app.domain.model.SkipResolution
 import com.margin.app.domain.model.Task
-import com.margin.app.domain.model.TaskStatus
-import com.margin.app.domain.model.TimeRange
-import com.margin.app.domain.model.TimetableKind
-import com.margin.app.domain.planner.Commitment
+import com.margin.app.domain.planner.CandidateBuilder
+import com.margin.app.domain.planner.DayMode
 import com.margin.app.domain.planner.DayPlanner
 import com.margin.app.domain.planner.Diagnostic
+import com.margin.app.domain.planner.ExamPressure
 import com.margin.app.domain.planner.PlacedBlock
 import com.margin.app.domain.planner.PlanDiff
 import com.margin.app.domain.planner.PlannedDay
 import com.margin.app.domain.planner.PlannerInput
-import com.margin.app.domain.planner.PlannerPreferences
-import com.margin.app.domain.planner.QuotaCandidate
-import com.margin.app.domain.planner.QuotaKind
+import com.margin.app.domain.planner.PlanningContext
 import com.margin.app.domain.planner.WorkCandidate
 import com.margin.app.domain.planner.WorkloadAllocator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
-import kotlin.math.roundToInt
 
 data class PlanResult(
     val date: LocalDate,
@@ -40,22 +40,32 @@ data class PlanResult(
     val diff: PlanDiff,
     val diagnostics: List<Diagnostic>,
     val headline: String,
+    /** Work that did not fit, with what was left of it. */
+    val unplaced: List<WorkCandidate> = emptyList(),
+    val notes: List<String> = emptyList(),
+    val mode: DayMode = DayMode.NORMAL,
+    val exam: ExamPressure = ExamPressure.NONE,
 )
 
 /**
- * Turns the database into a [PlannerInput], runs the engine, and writes the result back.
+ * Turns the database into a [PlanningContext], lets [CandidateBuilder] decide what the day
+ * should hold, lets [DayPlanner] decide where it goes, and writes the result back.
  *
- * All of the "what should be considered today" judgement lives here; all of the "where does
- * it go" judgement lives in [DayPlanner]. Keeping the two apart is what makes the engine
- * testable without a database.
+ * Replans are serialised: a notification action and a tap in the app can arrive at the same
+ * moment, and two replans interleaving would leave a day half one plan and half the other.
  */
 class PlanningService(
     private val timetableRepository: TimetableRepository,
     private val taskRepository: TaskRepository,
     private val scheduleRepository: ScheduleRepository,
     private val preferencesRepository: PreferencesRepository,
+    private val dayRepository: DayRepository,
+    private val goalRepository: GoalRepository,
+    private val examRepository: ExamRepository,
     private val planner: DayPlanner = DayPlanner(),
 ) {
+
+    private val mutex = Mutex()
 
     /** Generates the plan only if the day has none yet. Cheap to call on every app open. */
     suspend fun ensurePlan(date: LocalDate, now: LocalDateTime = LocalDateTime.now()): PlanResult? {
@@ -65,271 +75,154 @@ class PlanningService(
     }
 
     /**
-     * Rebuilds the open part of [date]. Completed, skipped, running and locked blocks are
-     * carried through untouched; only what is still merely planned can move.
+     * Replans today only if the plan has gone stale: a planned session whose whole slot has
+     * passed without starting. That marks it missed and puts its work back where it fits,
+     * without the user having to do anything.
+     */
+    suspend fun refreshIfStale(now: LocalDateTime = LocalDateTime.now()): PlanResult? {
+        val today = now.toLocalDate()
+        val nowMinute = MarginTime.nowMinute(now)
+        val stale = scheduleRepository.blocksFor(today).any {
+            it.status == BlockStatus.PLANNED && it.type.isWork && it.end <= nowMinute
+        }
+        return if (stale) replan(today, now) else null
+    }
+
+    /**
+     * Rebuilds the part of [date] that is still ahead. Completed, skipped, running, pinned
+     * and past blocks are carried through untouched; only what is still planned and still to
+     * come can move.
      */
     suspend fun replan(
         date: LocalDate,
         now: LocalDateTime = LocalDateTime.now(),
-    ): PlanResult = withContext(Dispatchers.Default) {
+    ): PlanResult = mutex.withLock {
+        withContext(Dispatchers.Default) { rebuild(date, now) }
+    }
+
+    private suspend fun rebuild(date: LocalDate, now: LocalDateTime): PlanResult {
         val prefs = preferencesRepository.current()
         val plannerPrefs = prefs.toPlannerPreferences(date.toEpochDay())
 
-        val previousBlocks = scheduleRepository.blocksFor(date)
-        val settledDomain = previousBlocks.filter { it.status != BlockStatus.PLANNED || it.locked }
-        val settled = settledDomain.map { it.toPlaced(SETTLED_PREFIX) }
-
         val isToday = date == now.toLocalDate()
         val nowMinute = if (isToday) MarginTime.nowMinute(now) else null
+        val fromMinute = nowMinute?.let { plannerPrefs.roundUp(it) } ?: 0
 
-        val commitments = buildCommitments(date, settledDomain)
-        val work = buildWorkCandidates(date, plannerPrefs, settledDomain)
-        val quotas = buildQuotas(date, plannerPrefs, work, settledDomain)
+        // Sessions whose whole slot has passed without being started are recorded as missed,
+        // not silently dropped. Their work is still wanted, so the plan below places it again.
+        if (nowMinute != null) markMissed(date, nowMinute)
 
-        val input = PlannerInput(
+        val previous = scheduleRepository.blocksFor(date)
+        val settled = previous.filter { block ->
+            BlockStateMachine.isSettled(block) || (nowMinute != null && block.end <= fromMinute)
+        }
+        val occupying = settled.filter { BlockStateMachine.occupiesTime(it) }
+
+        val tasks = taskRepository.activeTasks()
+        val completions = scheduleRepository.completions(date.minusDays(HISTORY_DAYS), date)
+        val weekStart = date.minusDays(6)
+        val weekCompletions = completions.filter { !it.date.isBefore(weekStart) }
+
+        val context = PlanningContext(
             date = date,
             prefs = plannerPrefs,
-            commitments = commitments,
-            work = work,
-            quotas = quotas,
+            settings = prefs.toPlanSettings(),
+            dayState = dayRepository.state(date),
             nowMinute = nowMinute,
+            classes = timetableRepository.entriesFor(date),
+            weeklyEntries = timetableRepository.weeklyEntries(),
+            routines = timetableRepository.routines(),
+            events = taskRepository.eventsOn(date),
+            subjects = timetableRepository.subjects(),
+            tasks = tasks,
+            projects = taskRepository.projects(),
+            learningGoals = goalRepository.activeGoals(),
+            exams = examRepository.upcoming(date),
+            completions = completions,
+            skips = scheduleRepository.skips(date.minusDays(SKIP_DAYS), date),
+            deferred = dayRepository.deferredFor(date),
             settled = settled,
-            previous = previousBlocks.map { it.toPlaced("prev") },
+            taskCapacities = estimateCapacities(date, tasks),
+            weekBuildByProject = weekCompletions
+                .filter { it.type == BlockType.BUILD && it.projectId != null }
+                .groupBy { it.projectId!! }
+                .mapValues { (_, list) -> list.sumOf { it.minutes } },
+            weekLearningByGoal = weekCompletions
+                .filter { it.type == BlockType.LEARN && it.learningGoalId != null }
+                .groupBy { it.learningGoalId!! }
+                .mapValues { (_, list) -> list.sumOf { it.minutes } },
         )
 
-        val planned: PlannedDay = planner.plan(input)
+        val built = CandidateBuilder.build(context)
+        val planned: PlannedDay = planner.plan(
+            PlannerInput(
+                date = date,
+                prefs = built.prefs,
+                commitments = built.commitments,
+                work = built.work,
+                quotas = built.quotas,
+                nowMinute = nowMinute,
+                settled = occupying.map { it.toPlaced(SETTLED_PREFIX) },
+                previous = previous
+                    .filter { it.status == BlockStatus.PLANNED && it.end > fromMinute }
+                    .map { it.toPlaced("prev") },
+            ),
+        )
 
         val fresh = planned.blocks
             .filterNot { it.key.startsWith(SETTLED_PREFIX) }
+            // Anything in the past that the record already covers is not added a second time.
+            .filterNot { block -> block.end <= fromMinute && settled.any { it.range.overlaps(block.range) } }
             .map { it.toScheduleBlock(date) }
 
-        scheduleRepository.replacePlanned(date, fresh)
+        scheduleRepository.replacePlannedFrom(date, fromMinute, fresh)
 
         val diff = PlanDiff.of(
-            previous = previousBlocks.filter { it.status == BlockStatus.PLANNED }.map { it.toPlaced("prev") },
-            next = planned.blocks.filterNot { it.key.startsWith(SETTLED_PREFIX) },
+            previous = previous
+                .filter { it.status == BlockStatus.PLANNED && !it.locked && it.end > fromMinute }
+                .map { it.toPlaced("prev") },
+            next = fresh.filter { it.end > fromMinute }.map { it.toPlaced("next") },
         )
         val headline = headlineFor(planned)
         val version = (scheduleRepository.plan(date)?.version ?: 0) + 1
-        scheduleRepository.savePlan(date, version, headline, plannerPrefs.energyMode.key)
+        scheduleRepository.savePlan(
+            date = date,
+            version = version,
+            headline = headline,
+            energyMode = built.prefs.energyMode.key,
+            work = built.intended,
+            mode = built.mode.name.lowercase(),
+            notes = built.notes,
+        )
 
-        PlanResult(
+        return PlanResult(
             date = date,
             blocks = scheduleRepository.blocksFor(date),
             diff = diff,
             diagnostics = planned.diagnostics,
             headline = headline,
+            unplaced = planned.unplaced,
+            notes = built.notes,
+            mode = built.mode,
+            exam = built.exam,
         )
     }
 
-    // ---------------------------------------------------------------------------------------
-    // Commitments
-    // ---------------------------------------------------------------------------------------
-
-    private suspend fun buildCommitments(
-        date: LocalDate,
-        settled: List<ScheduleBlock>,
-    ): List<Commitment> {
-        val out = mutableListOf<Commitment>()
-        val settledRanges = settled.map { it.range }
-
-        for (entry in timetableRepository.entriesFor(date)) {
-            val type = if (entry.kind == TimetableKind.RECESS) BlockType.BREAK else BlockType.CLASS
-            out += Commitment(
-                id = "class:${entry.id}",
-                title = entry.title,
-                subtitle = listOfNotNull(
-                    entry.subjectCode.takeIf { entry.kind != TimetableKind.RECESS },
-                    entry.location,
-                ).joinToString(" - ").ifBlank { null },
-                range = entry.range,
-                type = type,
-                category = if (type == BlockType.BREAK) Category.LEISURE else Category.ACADEMICS,
-                subjectCode = entry.subjectCode,
-                timetableEntryId = entry.id.takeIf { it > 0 },
-                generatesReview = entry.kind.isTeaching,
+    /** Closes out planned work whose time has fully passed without it being started. */
+    private suspend fun markMissed(date: LocalDate, nowMinute: Int) {
+        val passed = scheduleRepository.blocksFor(date).filter {
+            it.status == BlockStatus.PLANNED && it.type.isWork && it.end <= nowMinute
+        }
+        for (block in passed) {
+            val missed = block.copy(status = BlockStatus.MISSED, locked = false)
+            scheduleRepository.update(missed)
+            scheduleRepository.recordSkip(
+                block = missed,
+                reason = "Its time passed without it being started.",
+                resolution = SkipResolution.UNRESOLVED,
+                kind = SkipKind.MISSED,
             )
         }
-
-        for (routine in timetableRepository.routines()) {
-            if (!routine.appliesTo(date.dayOfWeek)) continue
-            out += Commitment(
-                id = "routine:${routine.id}",
-                title = routine.title,
-                range = routine.range,
-                type = when (routine.kind) {
-                    com.margin.app.domain.model.RoutineKind.MEAL -> BlockType.MEAL
-                    com.margin.app.domain.model.RoutineKind.COMMUTE -> BlockType.COMMUTE
-                    com.margin.app.domain.model.RoutineKind.SLEEP -> BlockType.SLEEP
-                    com.margin.app.domain.model.RoutineKind.COMMITMENT -> BlockType.ROUTINE
-                },
-                category = routine.category,
-                routineId = routine.id,
-            )
-        }
-
-        for (event in taskRepository.eventsOn(date)) {
-            out += Commitment(
-                id = "event:${event.id}",
-                title = event.title,
-                subtitle = event.notes,
-                range = if (event.allDay) TimeRange(0, 24 * 60) else event.range,
-                type = BlockType.EVENT,
-                category = event.category,
-                eventId = event.id,
-            )
-        }
-
-        // Settled blocks (done, skipped, running, pinned) are handed to the planner separately
-        // and already occupy their time. Drop any commitment that one of them represents,
-        // otherwise a class marked done would be placed twice.
-        val settledClassIds = settled.mapNotNull { it.timetableEntryId }.toSet()
-        val settledEventIds = settled.mapNotNull { it.eventId }.toSet()
-        val settledRoutineIds = settled.mapNotNull { it.routineId }.toSet()
-
-        return out.filterNot { commitment ->
-            val classId = commitment.timetableEntryId
-            val eventId = commitment.eventId
-            val routineId = commitment.routineId
-            (classId != null && classId in settledClassIds) ||
-                (eventId != null && eventId in settledEventIds) ||
-                (routineId != null && routineId in settledRoutineIds) ||
-                settledRanges.any { it.contains(commitment.range) }
-        }
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // Work candidates
-    // ---------------------------------------------------------------------------------------
-
-    private suspend fun buildWorkCandidates(
-        date: LocalDate,
-        prefs: PlannerPreferences,
-        settled: List<ScheduleBlock>,
-    ): List<WorkCandidate> {
-        val out = mutableListOf<WorkCandidate>()
-        val doneToday = settled
-            .filter { it.status == BlockStatus.DONE && it.taskId != null }
-            .groupBy { it.taskId!! }
-            .mapValues { entry -> entry.value.sumOf { it.elapsedMinutes.takeIf { m -> m > 0 } ?: it.duration } }
-
-        val tasks = taskRepository.activeTasks()
-        val capacities = estimateCapacities(date, tasks)
-
-        for (task in tasks) {
-            if (task.status != TaskStatus.ACTIVE) continue
-            val already = doneToday[task.id] ?: 0
-            val candidate = task.toCandidate(date, prefs, capacities, already) ?: continue
-            out += candidate
-        }
-
-        if (prefs.reviewEnabled) out += reviewCandidates(date, prefs, doneToday.keys)
-
-        return out.sortedBy { it.id }
-    }
-
-    private suspend fun Task.toCandidate(
-        date: LocalDate,
-        prefs: PlannerPreferences,
-        capacities: List<WorkloadAllocator.DayCapacity>,
-        alreadyDoneToday: Int,
-    ): WorkCandidate? {
-        if (isRecurring && !recursOn(date.dayOfWeek)) return null
-
-        val wanted = if (isRecurring) {
-            (estimatedMinutes - alreadyDoneToday).coerceAtLeast(0)
-        } else {
-            WorkloadAllocator.minutesFor(this, date, prefs, capacities) - alreadyDoneToday
-        }
-        if (wanted < MIN_PLACEABLE) return null
-
-        // Only look at tasks that are relevant now: due within the horizon, pinned to today,
-        // or with no deadline at all. Otherwise a long backlog would crowd out today.
-        val days = deadlineDate?.let { (it.toEpochDay() - date.toEpochDay()).toInt() }
-        if (days != null && days > RELEVANCE_HORIZON_DAYS && pinnedDate != date) return null
-
-        val project = taskRepository.project(projectId)
-
-        return WorkCandidate(
-            id = "task:$id",
-            minutes = wanted,
-            title = title,
-            subtitle = project?.name ?: subjectCode,
-            type = if (category == Category.BUILD) BlockType.BUILD else BlockType.TASK,
-            category = category,
-            taskId = id,
-            projectId = projectId,
-            subjectCode = subjectCode,
-            minSession = minSessionMinutes.coerceAtMost(wanted).coerceAtLeast(5),
-            maxSession = maxSessionMinutes.coerceAtLeast(minSessionMinutes),
-            priority = priority,
-            difficulty = difficulty,
-            energy = energy,
-            daysToDeadline = days,
-            deadlineMinute = deadlineMinute?.takeIf { days == 0 },
-            preferredWindow = preferredWindow,
-            splittable = splittable,
-            importance = if (pinnedDate == date) 30 else 0,
-        )
-    }
-
-    /**
-     * Revision for the classes that actually happened today, weighted per subject. This is
-     * the timetable-to-study link: the app knows what was taught and proposes proportionate
-     * review, rather than assuming every subject needs the same half hour.
-     */
-    private suspend fun reviewCandidates(
-        date: LocalDate,
-        prefs: PlannerPreferences,
-        alreadyDone: Set<Long>,
-    ): List<WorkCandidate> {
-        val teaching = timetableRepository.entriesFor(date).filter { it.kind.isTeaching }
-        if (teaching.isEmpty()) return emptyList()
-
-        val subjects = timetableRepository.subjects().associateBy { it.code }
-        val bySubject = teaching.filter { it.subjectCode != null }.groupBy { it.subjectCode!! }
-        val perSubject = bySubject.mapValues { entry -> entry.value.sumOf { it.range.duration } }
-        // Revision of a subject cannot be scheduled before the class it revises.
-        val taughtBy = bySubject.mapValues { entry -> entry.value.maxOf { it.range.end } }
-
-        val raw = perSubject.map { (code, taughtMinutes) ->
-            val subject = subjects[code]
-            val weight = subject?.reviewWeight ?: 1f
-            val minutes = (taughtMinutes / 60f) * prefs.reviewMinutesPerTeachingHour * weight
-            code to minutes
-        }.sortedWith(compareByDescending<Pair<String, Float>> { it.second }.thenBy { it.first })
-
-        val total = raw.sumOf { it.second.toDouble() }.toFloat()
-        val scale = if (total > prefs.maxReviewMinutesPerDay) prefs.maxReviewMinutesPerDay / total else 1f
-
-        var budget = prefs.maxReviewMinutesPerDay
-        val out = mutableListOf<WorkCandidate>()
-        for ((code, rawMinutes) in raw) {
-            if (budget < prefs.minReviewSession) break
-            val minutes = prefs.roundUp((rawMinutes * scale).roundToInt())
-                .coerceAtLeast(prefs.minReviewSession)
-                .coerceAtMost(budget)
-            if (minutes < prefs.minReviewSession) continue
-            val subject = subjects[code]
-            out += WorkCandidate(
-                id = "review:$code:${date.toEpochDay()}",
-                minutes = minutes,
-                title = "${subject?.shortName ?: code} review",
-                subtitle = "Today in class",
-                type = BlockType.REVIEW,
-                category = Category.ACADEMICS,
-                subjectCode = code,
-                minSession = prefs.minReviewSession.coerceAtMost(minutes),
-                maxSession = minutes,
-                earliestStart = taughtBy[code],
-                priority = Priority.NORMAL,
-                difficulty = Difficulty.MODERATE,
-                energy = EnergyLevel.MEDIUM,
-                splittable = false,
-            )
-            budget -= minutes
-        }
-        return out
     }
 
     private suspend fun estimateCapacities(
@@ -339,13 +232,13 @@ class PlanningService(
         val prefs = preferencesRepository.current()
         val furthest = tasks.mapNotNull { it.deadlineDate }.maxOrNull() ?: return emptyList()
         val horizon = minOf(furthest, date.plusDays(RELEVANCE_HORIZON_DAYS.toLong()))
+        val routines = timetableRepository.routines()
         val out = mutableListOf<WorkloadAllocator.DayCapacity>()
         var cursor = date
         while (!cursor.isAfter(horizon)) {
             val committed = timetableRepository.entriesFor(cursor).sumOf { it.range.duration } +
                 taskRepository.eventsOn(cursor).sumOf { it.range.duration } +
-                timetableRepository.routines().filter { it.appliesTo(cursor.dayOfWeek) }
-                    .sumOf { it.range.duration }
+                routines.filter { it.appliesTo(cursor.dayOfWeek) }.sumOf { it.range.duration }
             out += WorkloadAllocator.DayCapacity(
                 date = cursor,
                 freeMinutes = WorkloadAllocator.estimateCapacity(
@@ -356,58 +249,6 @@ class PlanningService(
             cursor = cursor.plusDays(1)
         }
         return out
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // Quotas
-    // ---------------------------------------------------------------------------------------
-
-    private fun buildQuotas(
-        date: LocalDate,
-        prefs: PlannerPreferences,
-        work: List<WorkCandidate>,
-        settled: List<ScheduleBlock>,
-    ): List<QuotaCandidate> {
-        val quotas = mutableListOf<QuotaCandidate>()
-
-        val leisureAlready = settled
-            .filter { it.type == BlockType.LEISURE && it.status != BlockStatus.SKIPPED }
-            .sumOf { it.duration }
-        val leisureNeeded = (prefs.effectiveLeisureFloor - leisureAlready).coerceAtLeast(0)
-        if (leisureNeeded >= prefs.minLeisureChunk) {
-            quotas += QuotaCandidate(
-                id = "quota:leisure",
-                minutes = leisureNeeded,
-                kind = QuotaKind.LEISURE,
-                title = "Leisure",
-                window = prefs.leisureWindow,
-                minChunk = prefs.minLeisureChunk,
-                category = Category.LEISURE,
-                type = BlockType.LEISURE,
-            )
-        }
-
-        val weekend = MarginTime.isWeekend(date)
-        val buildTarget = if (weekend) prefs.buildMinutesWeekend else prefs.buildMinutesWeekday
-        val buildFromTasks = work.filter { it.category == Category.BUILD }.sumOf { it.minutes }
-        val buildAlready = settled
-            .filter { it.type == BlockType.BUILD && it.status != BlockStatus.SKIPPED }
-            .sumOf { it.duration }
-        val buildNeeded = (buildTarget - buildFromTasks - buildAlready).coerceAtLeast(0)
-        if (buildNeeded >= prefs.minBuildChunk) {
-            quotas += QuotaCandidate(
-                id = "quota:build",
-                minutes = buildNeeded,
-                kind = QuotaKind.BUILD,
-                title = "Build",
-                window = prefs.buildWindow,
-                minChunk = prefs.minBuildChunk,
-                category = Category.BUILD,
-                type = BlockType.BUILD,
-            )
-        }
-
-        return quotas
     }
 
     // ---------------------------------------------------------------------------------------
@@ -430,6 +271,10 @@ class PlanningService(
         subjectCode = subjectCode,
         locked = locked,
         reason = reason,
+        academicType = academicType,
+        candidateId = candidateId,
+        learningGoalId = learningGoalId,
+        optional = optional,
     )
 
     private fun PlacedBlock.toScheduleBlock(date: LocalDate) = ScheduleBlock(
@@ -449,6 +294,12 @@ class PlanningService(
         subjectCode = subjectCode,
         locked = locked,
         reason = reason,
+        academicType = academicType,
+        candidateId = candidateId,
+        learningGoalId = learningGoalId,
+        optional = optional,
+        plannedStart = range.start,
+        plannedMinutes = range.duration,
     )
 
     private fun headlineFor(day: PlannedDay): String {
@@ -463,7 +314,8 @@ class PlanningService(
 
     private companion object {
         const val SETTLED_PREFIX = "settled"
-        const val MIN_PLACEABLE = 10
         const val RELEVANCE_HORIZON_DAYS = 14
+        const val HISTORY_DAYS = 60L
+        const val SKIP_DAYS = 28L
     }
 }

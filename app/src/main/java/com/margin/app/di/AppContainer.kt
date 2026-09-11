@@ -2,14 +2,20 @@ package com.margin.app.di
 
 import android.content.Context
 import com.margin.app.ai.AssistantService
+import com.margin.app.ai.VisionImporter
 import com.margin.app.ai.context.ContextBuilder
 import com.margin.app.data.db.MarginDatabase
 import com.margin.app.data.prefs.AiSettingsRepository
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.repository.DayRepository
+import com.margin.app.data.repository.ExamRepository
+import com.margin.app.data.repository.GoalRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
 import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.domain.planner.DayPlanner
+import com.margin.app.domain.usecase.DataExporter
+import com.margin.app.domain.usecase.DayRollover
 import com.margin.app.domain.usecase.PlanningService
 import com.margin.app.domain.usecase.ScheduleActions
 import com.margin.app.domain.usecase.SeedService
@@ -48,6 +54,15 @@ class AppContainer(context: Context) {
         historyDao = database.historyDao(),
     )
 
+    val dayRepository = DayRepository(
+        dayStateDao = database.dayStateDao(),
+        deferredDao = database.deferredWorkDao(),
+        nudgeDao = database.nudgeLogDao(),
+    )
+
+    val goalRepository = GoalRepository(database.learningGoalDao())
+    val examRepository = ExamRepository(database.examDao())
+
     val planner = DayPlanner()
 
     val planningService = PlanningService(
@@ -55,12 +70,24 @@ class AppContainer(context: Context) {
         taskRepository = taskRepository,
         scheduleRepository = scheduleRepository,
         preferencesRepository = preferencesRepository,
+        dayRepository = dayRepository,
+        goalRepository = goalRepository,
+        examRepository = examRepository,
         planner = planner,
     )
 
     val scheduleActions = ScheduleActions(
         scheduleRepository = scheduleRepository,
         taskRepository = taskRepository,
+        planningService = planningService,
+        dayRepository = dayRepository,
+        preferencesRepository = preferencesRepository,
+    )
+
+    val dayRollover = DayRollover(
+        scheduleRepository = scheduleRepository,
+        dayRepository = dayRepository,
+        preferencesRepository = preferencesRepository,
         planningService = planningService,
     )
 
@@ -73,12 +100,15 @@ class AppContainer(context: Context) {
         context = appContext,
         scheduleRepository = scheduleRepository,
         preferencesRepository = preferencesRepository,
+        dayRepository = dayRepository,
     )
 
     private val contextBuilder = ContextBuilder(
         scheduleRepository = scheduleRepository,
         taskRepository = taskRepository,
         timetableRepository = timetableRepository,
+        examRepository = examRepository,
+        dayRepository = dayRepository,
     )
 
     val assistantService = AssistantService(
@@ -86,9 +116,27 @@ class AppContainer(context: Context) {
         preferencesRepository = preferencesRepository,
         taskRepository = taskRepository,
         scheduleRepository = scheduleRepository,
+        timetableRepository = timetableRepository,
+        examRepository = examRepository,
         planningService = planningService,
         scheduleActions = scheduleActions,
         contextBuilder = contextBuilder,
         interactionDao = database.aiInteractionDao(),
     )
+
+    val visionImporter = VisionImporter(aiSettingsRepository)
+
+    val dataExporter = DataExporter(
+        context = appContext,
+        timetableRepository = timetableRepository,
+        taskRepository = taskRepository,
+        scheduleRepository = scheduleRepository,
+        goalRepository = goalRepository,
+        examRepository = examRepository,
+    )
+
+    /** Deletes every record of what happened; tasks, timetable and settings stay. */
+    suspend fun clearHistory() {
+        scheduleRepository.clearHistory()
+    }
 }

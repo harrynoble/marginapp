@@ -16,18 +16,29 @@ launch is a working plan rather than an empty dashboard.
 ## What it does
 
 - **Knows the week.** The recurring timetable is seeded and editable, with per-date
-  exceptions for cancelled classes, holidays and extra periods.
-- **Builds the day.** A pure-Kotlin engine places work around classes, meals, travel and
-  events, inserts breaks, and protects leisure and build time as floors rather than leftovers.
-- **Spreads work across days.** A 90-minute assignment due Friday becomes 45 minutes on
-  Wednesday and 45 on Thursday, not one block dumped wherever there was a gap.
-- **Reviews what was taught.** It knows which subjects you had today and proposes
-  proportionate revision, weighted per subject, capped per day, and switchable off.
-- **Adapts.** Finishing early, running over, skipping, taking a break, or adding an event all
-  trigger a replan, and the app tells you exactly what moved and what it protected.
-- **Explains itself.** Every scheduled block carries the reason it is where it is.
-- **Works offline.** The planner, timetable, tasks, notifications, history and check-in never
-  touch the network. The assistant is an enhancement, and it degrades to an on-device parser.
+  exceptions, and a new semester can be imported from a photo or PDF with a review step.
+- **Keeps theory and lab apart.** Every subject is two tracks where it has a lab, and
+  coverage is tracked per track, so no subject and no lab is ever quietly forgotten.
+- **Guides the session.** "Time to study" when it starts; at the planned end, move to the
+  next session or keep going, with the extra time recorded rather than lost.
+- **Plans breaks from real work.** A break is suggested when the actual run of work has
+  earned one, sooner on a low-energy day, without wrecking the rest of the plan.
+- **Offers build and learning time.** Project work and new skills are first-class, offered
+  once academics are handled. "Not today" is always an answer, and it is never held against you.
+- **Protects leisure.** Leisure is a floor, reserved before any work is placed.
+- **Lightens the day on request.** Say what absolutely has to happen; the rest is left off
+  without being marked as skipped or piled onto tomorrow. A minimum day is suggested when
+  the day is simply too full.
+- **Handles exams.** Add an exam timetable and revision builds up as exams approach, across
+  every subject, without switching to a different app.
+- **Never loses missed work.** "Are you out?" after a grace period; when you're back, the day
+  is replanned and what no longer fits moves to tomorrow, capped so tomorrow stays realistic.
+- **Learns how you work.** How long things really take you, when you tend to skip, and when
+  you do your best work, from plain statistics over your own history.
+- **Explains itself.** Every block carries the reason it is where it is, and "why" questions
+  are answered from those reasons.
+- **Works offline.** Everything except free-form language and image import runs on the
+  device. Your data can be exported or deleted from Settings.
 
 ## The rule the AI plays by
 
@@ -115,7 +126,9 @@ No key is compiled into the app and none is required. To enable free-form natura
 The key is stored in a DataStore file separate from the rest of the settings and excluded
 from cloud backup. Requests contain only the current time, your free windows, the titles and
 times of today's blocks, and your open work — never notes, history or the database. Turning
-off **Send the shape of my day** narrows that to the clock and free time alone.
+off **Share the shape of my day** narrows that to the clock and free time alone. Common
+sentences ("I'm out until 9", "make today lighter", "DS exam on Nov 12") are understood on
+the device and never sent anywhere.
 
 ---
 

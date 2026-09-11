@@ -7,6 +7,7 @@ import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
 import com.margin.app.di.AppContainer
+import com.margin.app.domain.model.BlockStateMachine
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.CalendarEvent
 import com.margin.app.domain.model.Category
@@ -42,11 +43,18 @@ data class PlanUiState(
     val showStructural: Boolean = false,
     val loading: Boolean = true,
 ) {
+    /**
+     * Skipped, missed or moved blocks stay in the record, but where the day was rebuilt over
+     * them they would stack on top of what is really happening, so only the live one is drawn.
+     */
     val visibleBlocks: List<ScheduleBlock>
-        get() = if (showStructural) {
-            blocks
-        } else {
-            blocks.filter { it.type != BlockType.SLEEP }
+        get() {
+            val base = if (showStructural) blocks else blocks.filter { it.type != BlockType.SLEEP }
+            val live = base.filter { BlockStateMachine.occupiesTime(it) }
+            return base.filter { block ->
+                BlockStateMachine.occupiesTime(block) ||
+                    live.none { it.id != block.id && it.start < block.end && block.start < it.end }
+            }
         }
 
     val isToday: Boolean get() = selectedDate == LocalDate.now()

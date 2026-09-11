@@ -9,10 +9,16 @@ import androidx.room.Transaction
 import androidx.room.Update
 import androidx.room.Upsert
 import com.margin.app.data.db.entity.AiInteractionEntity
+import com.margin.app.data.db.entity.BreakRecordEntity
 import com.margin.app.data.db.entity.CalendarEventEntity
 import com.margin.app.data.db.entity.CompletionRecordEntity
 import com.margin.app.data.db.entity.DailyCheckInEntity
 import com.margin.app.data.db.entity.DailyPlanEntity
+import com.margin.app.data.db.entity.DayStateEntity
+import com.margin.app.data.db.entity.DeferredWorkEntity
+import com.margin.app.data.db.entity.ExamEntity
+import com.margin.app.data.db.entity.LearningGoalEntity
+import com.margin.app.data.db.entity.NudgeLogEntity
 import com.margin.app.data.db.entity.ProjectEntity
 import com.margin.app.data.db.entity.RescheduleRecordEntity
 import com.margin.app.data.db.entity.ResourceLinkEntity
@@ -33,6 +39,9 @@ interface SubjectDao {
 
     @Query("SELECT * FROM subjects WHERE active = 1 ORDER BY code")
     suspend fun activeSubjects(): List<SubjectEntity>
+
+    @Query("SELECT * FROM subjects ORDER BY code")
+    suspend fun all(): List<SubjectEntity>
 
     @Query("SELECT * FROM subjects WHERE code = :code")
     suspend fun byCode(code: String): SubjectEntity?
@@ -79,6 +88,12 @@ interface TimetableDao {
     @Query("DELETE FROM timetable_entries")
     suspend fun clear()
 
+    @Transaction
+    suspend fun replaceAll(entries: List<TimetableEntryEntity>) {
+        clear()
+        insertAll(entries)
+    }
+
     @Query("SELECT COUNT(*) FROM timetable_entries")
     suspend fun count(): Int
 
@@ -107,6 +122,9 @@ interface RoutineDao {
 
     @Query("SELECT * FROM routines WHERE active = 1 ORDER BY start")
     suspend fun allActive(): List<RoutineEntity>
+
+    @Query("SELECT * FROM routines ORDER BY start")
+    suspend fun all(): List<RoutineEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(routine: RoutineEntity): Long
@@ -143,12 +161,60 @@ interface ProjectDao {
 }
 
 @Dao
+interface LearningGoalDao {
+    @Query("SELECT * FROM learning_goals ORDER BY active DESC, name")
+    fun observeAll(): Flow<List<LearningGoalEntity>>
+
+    @Query("SELECT * FROM learning_goals WHERE active = 1 ORDER BY name")
+    suspend fun allActive(): List<LearningGoalEntity>
+
+    @Query("SELECT * FROM learning_goals WHERE id = :id")
+    suspend fun byId(id: Long): LearningGoalEntity?
+
+    @Upsert
+    suspend fun upsert(goal: LearningGoalEntity): Long
+
+    @Query("DELETE FROM learning_goals WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Dao
+interface ExamDao {
+    @Query("SELECT * FROM exams ORDER BY date, startMinute")
+    fun observeAll(): Flow<List<ExamEntity>>
+
+    @Query("SELECT * FROM exams WHERE date >= :from ORDER BY date, startMinute")
+    fun observeFrom(from: Long): Flow<List<ExamEntity>>
+
+    @Query("SELECT * FROM exams WHERE date >= :from ORDER BY date, startMinute")
+    suspend fun from(from: Long): List<ExamEntity>
+
+    @Query("SELECT * FROM exams WHERE id = :id")
+    suspend fun byId(id: Long): ExamEntity?
+
+    @Upsert
+    suspend fun upsert(exam: ExamEntity): Long
+
+    @Insert
+    suspend fun insertAll(exams: List<ExamEntity>)
+
+    @Query("DELETE FROM exams WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM exams WHERE date < :before")
+    suspend fun deleteBefore(before: Long)
+}
+
+@Dao
 interface TaskDao {
     @Query("SELECT * FROM tasks WHERE status != 'ARCHIVED' ORDER BY deadlineDate IS NULL, deadlineDate, priority DESC, id")
     fun observeActive(): Flow<List<TaskEntity>>
 
     @Query("SELECT * FROM tasks ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<TaskEntity>>
+
+    @Query("SELECT * FROM tasks")
+    suspend fun all(): List<TaskEntity>
 
     @Query("SELECT * FROM tasks WHERE status = 'ACTIVE'")
     suspend fun activeTasks(): List<TaskEntity>
@@ -207,6 +273,9 @@ interface EventDao {
     @Query("SELECT * FROM events WHERE date BETWEEN :from AND :to ORDER BY date, start")
     fun observeRange(from: Long, to: Long): Flow<List<CalendarEventEntity>>
 
+    @Query("SELECT * FROM events ORDER BY date, start")
+    suspend fun all(): List<CalendarEventEntity>
+
     @Query("SELECT * FROM events WHERE id = :id")
     suspend fun byId(id: Long): CalendarEventEntity?
 
@@ -255,16 +324,22 @@ interface ScheduleDao {
     @Query("DELETE FROM schedule_blocks WHERE id = :id")
     suspend fun delete(id: Long)
 
-    /** Replans wipe only the blocks that are still open; history is never destroyed. */
-    @Query("DELETE FROM schedule_blocks WHERE date = :date AND status IN ('PLANNED') AND locked = 0")
-    suspend fun clearPlanned(date: Long)
+    /**
+     * Replans wipe only the blocks that are still open and still ahead. Anything in the past
+     * stays as the record of the day; history is never destroyed.
+     */
+    @Query("DELETE FROM schedule_blocks WHERE date = :date AND status = 'PLANNED' AND locked = 0 AND `end` > :fromMinute")
+    suspend fun clearPlannedFrom(date: Long, fromMinute: Int)
 
     @Query("DELETE FROM schedule_blocks WHERE date = :date")
     suspend fun clearDate(date: Long)
 
+    @Query("DELETE FROM schedule_blocks WHERE date < :before")
+    suspend fun clearBefore(before: Long)
+
     @Transaction
-    suspend fun replacePlanned(date: Long, blocks: List<ScheduleBlockEntity>) {
-        clearPlanned(date)
+    suspend fun replacePlannedFrom(date: Long, fromMinute: Int, blocks: List<ScheduleBlockEntity>) {
+        clearPlannedFrom(date, fromMinute)
         insertAll(blocks)
     }
 
@@ -298,8 +373,60 @@ interface CheckInDao {
     @Query("SELECT * FROM check_ins WHERE date >= :from ORDER BY date DESC")
     fun observeFrom(from: Long): Flow<List<DailyCheckInEntity>>
 
+    @Query("SELECT * FROM check_ins ORDER BY date")
+    suspend fun all(): List<DailyCheckInEntity>
+
     @Upsert
     suspend fun upsert(checkIn: DailyCheckInEntity)
+}
+
+@Dao
+interface DayStateDao {
+    @Query("SELECT * FROM day_states WHERE date = :date")
+    suspend fun forDate(date: Long): DayStateEntity?
+
+    @Query("SELECT * FROM day_states WHERE date = :date")
+    fun observeForDate(date: Long): Flow<DayStateEntity?>
+
+    @Upsert
+    suspend fun upsert(state: DayStateEntity)
+
+    @Query("DELETE FROM day_states WHERE date < :before")
+    suspend fun pruneBefore(before: Long)
+}
+
+@Dao
+interface DeferredWorkDao {
+    @Query("SELECT * FROM deferred_work WHERE toDate = :date ORDER BY id")
+    suspend fun forDate(date: Long): List<DeferredWorkEntity>
+
+    @Query("SELECT * FROM deferred_work WHERE toDate = :date ORDER BY id")
+    fun observeForDate(date: Long): Flow<List<DeferredWorkEntity>>
+
+    /** The same work is never deferred to the same day twice. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(item: DeferredWorkEntity): Long
+
+    @Query("UPDATE deferred_work SET consumed = 1 WHERE toDate < :before")
+    suspend fun consumeBefore(before: Long)
+
+    @Query("SELECT * FROM deferred_work WHERE fromDate = :date")
+    suspend fun fromDate(date: Long): List<DeferredWorkEntity>
+}
+
+@Dao
+interface NudgeLogDao {
+    @Query("SELECT `key` FROM nudge_log WHERE date = :date")
+    suspend fun keysFor(date: Long): List<String>
+
+    @Query("SELECT MAX(at) FROM nudge_log WHERE date = :date")
+    suspend fun lastAt(date: Long): Long?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(entry: NudgeLogEntity)
+
+    @Query("DELETE FROM nudge_log WHERE date < :before")
+    suspend fun pruneBefore(before: Long)
 }
 
 @Dao
@@ -312,6 +439,9 @@ interface HistoryDao {
 
     @Insert
     suspend fun insertReschedule(record: RescheduleRecordEntity): Long
+
+    @Insert
+    suspend fun insertBreak(record: BreakRecordEntity): Long
 
     @Query("SELECT * FROM completion_records WHERE date BETWEEN :from AND :to ORDER BY at")
     fun observeCompletions(from: Long, to: Long): Flow<List<CompletionRecordEntity>>
@@ -331,8 +461,26 @@ interface HistoryDao {
     @Query("SELECT * FROM reschedule_records WHERE date BETWEEN :from AND :to")
     suspend fun reschedules(from: Long, to: Long): List<RescheduleRecordEntity>
 
+    @Query("SELECT * FROM break_records WHERE date BETWEEN :from AND :to ORDER BY at")
+    fun observeBreaks(from: Long, to: Long): Flow<List<BreakRecordEntity>>
+
+    @Query("SELECT * FROM break_records WHERE date BETWEEN :from AND :to")
+    suspend fun breaks(from: Long, to: Long): List<BreakRecordEntity>
+
     @Query("UPDATE skip_records SET resolution = :resolution WHERE id = :id")
     suspend fun resolveSkip(id: Long, resolution: String)
+
+    @Query("DELETE FROM completion_records")
+    suspend fun clearCompletions()
+
+    @Query("DELETE FROM skip_records")
+    suspend fun clearSkips()
+
+    @Query("DELETE FROM reschedule_records")
+    suspend fun clearReschedules()
+
+    @Query("DELETE FROM break_records")
+    suspend fun clearBreaks()
 }
 
 @Dao

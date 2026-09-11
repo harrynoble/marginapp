@@ -6,7 +6,8 @@ import android.content.Intent
 import com.margin.app.MarginApplication
 import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.BlockStatus
-import com.margin.app.domain.model.BlockType
+import com.margin.app.domain.model.BreakReason
+import com.margin.app.domain.model.Decision
 import com.margin.app.domain.model.SkipResolution
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,86 +20,75 @@ private val receiverScope = CoroutineScope(SupervisorJob() + Dispatchers.Default
 
 private fun Context.container() = (applicationContext as? MarginApplication)?.container
 
-/** Fires when the next block is due, posts the reminder, then arms the following one. */
+/** Fires when a prompt is due: posts it from the day as it is now, then arms the next one. */
 class BlockAlarmReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        val blockId = intent.getLongExtra(EXTRA_BLOCK_ID, -1L)
-        val epochDay = intent.getLongExtra(EXTRA_DATE, -1L)
         val container = context.container() ?: return
         val pending = goAsync()
-
         receiverScope.launch {
             try {
                 Notifier.ensureChannels(context)
-                val prefs = container.preferencesRepository.current()
-                val block = container.scheduleRepository.block(blockId)
-
-                if (block != null && block.status == BlockStatus.PLANNED) {
-                    val previous = container.scheduleRepository
-                        .blocksFor(if (epochDay > 0) LocalDate.ofEpochDay(epochDay) else LocalDate.now())
-                        .filter { it.end == block.start }
-
-                    if (previous.any { it.type == BlockType.BREAK } && prefs.notifyBreakEnd) {
-                        Notifier.postBreakOver(context, block)
-                    } else {
-                        Notifier.postUpNext(
-                            context = context,
-                            block = block,
-                            use24Hour = prefs.use24HourTime,
-                            leadMinutes = (block.start - MarginTime.nowMinute()).coerceAtLeast(0),
-                        )
-                    }
-                }
-
+                runCatching { container.dayRollover.run() }
+                runCatching { container.planningService.ensurePlan(LocalDate.now()) }
+                container.alarmScheduler.fireDue()
                 container.alarmScheduler.rearm()
             } finally {
                 pending.finish()
             }
         }
     }
-
-    companion object {
-        const val EXTRA_BLOCK_ID = "block_id"
-        const val EXTRA_DATE = "date"
-    }
 }
 
-/** Start, Complete, Snooze and Skip straight from the notification shade. */
+/** Every choice a prompt offers, handled without opening the app. */
 class NotificationActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val blockId = intent.getLongExtra(EXTRA_BLOCK_ID, -1L)
-        if (blockId <= 0) return
+        val value = intent.getIntExtra(EXTRA_VALUE, 0)
         val container = context.container() ?: return
         val action = intent.action ?: return
         val pending = goAsync()
 
         receiverScope.launch {
             try {
+                val actions = container.scheduleActions
+                val now = LocalDateTime.now()
+                val today = now.toLocalDate()
                 when (action) {
-                    ACTION_START -> container.scheduleActions.start(blockId)
-                    ACTION_COMPLETE -> container.scheduleActions.complete(blockId)
-                    ACTION_SKIP -> container.scheduleActions.skip(
-                        blockId = blockId,
-                        resolution = SkipResolution.LATER_TODAY,
-                        reason = "Skipped from a notification",
-                    )
-                    ACTION_SNOOZE -> {
+                    ACTION_START -> actions.start(blockId, now)
+                    ACTION_COMPLETE -> actions.complete(blockId, now)
+                    ACTION_SKIP -> actions.skip(blockId, SkipResolution.LATER_TODAY, "Skipped from a notification", now)
+                    ACTION_SKIP_TODAY -> actions.skip(blockId, SkipResolution.DROP_TODAY, "Skipped for today", now)
+                    ACTION_LATER -> {
                         val block = container.scheduleRepository.block(blockId)
                         if (block != null) {
-                            container.scheduleActions.reschedule(
+                            val from = maxOf(block.start, MarginTime.nowMinute(now))
+                            actions.reschedule(
                                 blockId = blockId,
                                 toDate = block.date,
-                                toStart = (block.start + SNOOZE_MINUTES).coerceAtMost(24 * 60 - 5),
-                                reason = "Snoozed",
-                                now = LocalDateTime.now(),
+                                toStart = (from + value.coerceAtLeast(5)).coerceAtMost(24 * 60 - 5),
+                                reason = "Later, from a notification",
+                                now = now,
                             )
                         }
                     }
+                    ACTION_MOVE_NEXT -> actions.moveToNext(blockId, now)
+                    ACTION_CONTINUE -> actions.continueSession(blockId, value.coerceAtLeast(5), now)
+                    ACTION_BREAK -> actions.takeBreak(value.coerceIn(5, 120), now, BreakReason.SUGGESTED)
+                    ACTION_DISMISS -> Unit
+                    ACTION_BUILD_YES -> {
+                        actions.setBuildDecision(today, Decision.ACCEPTED, now = now)
+                        startSoon(container, blockId, now)
+                    }
+                    ACTION_BUILD_NO -> actions.setBuildDecision(today, Decision.DECLINED, now = now)
+                    ACTION_LEARN_YES -> {
+                        actions.setLearningDecision(today, Decision.ACCEPTED, now = now)
+                        startSoon(container, blockId, now)
+                    }
+                    ACTION_LEARN_NO -> actions.setLearningDecision(today, Decision.DECLINED, now = now)
                 }
-                Notifier.cancel(context, Notifier.NOTIFICATION_UP_NEXT)
-                Notifier.cancel(context, Notifier.NOTIFICATION_BREAK_OVER)
+                Notifier.cancel(context, Notifier.NOTIFICATION_GUIDE)
                 container.alarmScheduler.rearm()
             } finally {
                 pending.finish()
@@ -106,13 +96,37 @@ class NotificationActionReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * After "yes" to build or learning: if the session is about to begin anyway, start it.
+     * Accepting replans the day, so the block is found again by kind rather than by id.
+     */
+    private suspend fun startSoon(container: com.margin.app.di.AppContainer, blockId: Long, now: LocalDateTime) {
+        val original = container.scheduleRepository.block(blockId)
+        val nowMinute = MarginTime.nowMinute(now)
+        val target = container.scheduleRepository.blocksFor(now.toLocalDate())
+            .filter { it.status == BlockStatus.PLANNED && (original == null || it.type == original.type) }
+            .filter { it.type.isWork && it.start <= nowMinute + START_WINDOW && it.end > nowMinute }
+            .minByOrNull { it.start }
+        if (target != null) container.scheduleActions.start(target.id, now)
+    }
+
     companion object {
         const val EXTRA_BLOCK_ID = "block_id"
+        const val EXTRA_VALUE = "value"
         const val ACTION_START = "com.margin.app.action.START"
         const val ACTION_COMPLETE = "com.margin.app.action.COMPLETE"
         const val ACTION_SKIP = "com.margin.app.action.SKIP"
-        const val ACTION_SNOOZE = "com.margin.app.action.SNOOZE"
-        private const val SNOOZE_MINUTES = 10
+        const val ACTION_SKIP_TODAY = "com.margin.app.action.SKIP_TODAY"
+        const val ACTION_LATER = "com.margin.app.action.LATER"
+        const val ACTION_MOVE_NEXT = "com.margin.app.action.MOVE_NEXT"
+        const val ACTION_CONTINUE = "com.margin.app.action.CONTINUE"
+        const val ACTION_BREAK = "com.margin.app.action.BREAK"
+        const val ACTION_DISMISS = "com.margin.app.action.DISMISS"
+        const val ACTION_BUILD_YES = "com.margin.app.action.BUILD_YES"
+        const val ACTION_BUILD_NO = "com.margin.app.action.BUILD_NO"
+        const val ACTION_LEARN_YES = "com.margin.app.action.LEARN_YES"
+        const val ACTION_LEARN_NO = "com.margin.app.action.LEARN_NO"
+        private const val START_WINDOW = 20
     }
 }
 
@@ -125,7 +139,8 @@ class BootCompletedReceiver : BroadcastReceiver() {
         receiverScope.launch {
             try {
                 Notifier.ensureChannels(context)
-                container.planningService.ensurePlan(LocalDate.now())
+                runCatching { container.dayRollover.run() }
+                runCatching { container.planningService.ensurePlan(LocalDate.now()) }
                 container.alarmScheduler.rearm()
                 MarginWorkers.enqueueAll(context)
             } finally {

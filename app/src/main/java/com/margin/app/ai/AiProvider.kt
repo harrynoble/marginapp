@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
@@ -24,13 +25,22 @@ sealed interface AiOutcome {
     data class Failure(val message: String, val retryable: Boolean) : AiOutcome
 }
 
+/** An image to send with a request: base64 bytes and their media type. */
+data class EncodedImage(val base64: String, val mediaType: String)
+
 /**
- * One method, one shape. Swapping providers means adding a class here and an entry in
+ * One shape per capability. Swapping providers means adding a class here and an entry in
  * [AiProviderFactory]; nothing else in the app knows which model answered.
  */
 interface AiProvider {
     val id: String
     suspend fun complete(systemPrompt: String, userText: String, maxTokens: Int = 900): AiOutcome
+    suspend fun completeWithImage(
+        systemPrompt: String,
+        userText: String,
+        image: EncodedImage,
+        maxTokens: Int = 3000,
+    ): AiOutcome
 }
 
 object AiProviderFactory {
@@ -93,19 +103,50 @@ class AnthropicProvider(private val settings: AiSettings) : AiProvider {
 
     override val id: String = "anthropic"
 
-    override suspend fun complete(systemPrompt: String, userText: String, maxTokens: Int): AiOutcome {
+    override suspend fun complete(systemPrompt: String, userText: String, maxTokens: Int): AiOutcome =
+        send(systemPrompt, maxTokens, 30_000) {
+            put("role", "user")
+            put("content", userText)
+        }
+
+    override suspend fun completeWithImage(
+        systemPrompt: String,
+        userText: String,
+        image: EncodedImage,
+        maxTokens: Int,
+    ): AiOutcome = send(systemPrompt, maxTokens, 90_000) {
+        put("role", "user")
+        putJsonArray("content") {
+            add(
+                buildJsonObject {
+                    put("type", "image")
+                    putJsonObject("source") {
+                        put("type", "base64")
+                        put("media_type", image.mediaType)
+                        put("data", image.base64)
+                    }
+                },
+            )
+            add(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", userText)
+                },
+            )
+        }
+    }
+
+    private suspend fun send(
+        systemPrompt: String,
+        maxTokens: Int,
+        timeout: Int,
+        message: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): AiOutcome {
         val body = buildJsonObject {
             put("model", settings.model.ifBlank { AiProviderId.ANTHROPIC.defaultModel })
             put("max_tokens", maxTokens)
             put("system", systemPrompt)
-            putJsonArray("messages") {
-                add(
-                    buildJsonObject {
-                        put("role", "user")
-                        put("content", userText)
-                    },
-                )
-            }
+            putJsonArray("messages") { add(buildJsonObject(message)) }
         }
         val result = postJson(
             url = settings.baseUrl.trimEnd('/') + "/v1/messages",
@@ -114,14 +155,13 @@ class AnthropicProvider(private val settings: AiSettings) : AiProvider {
                 "anthropic-version" to "2023-06-01",
             ),
             body = body,
+            timeoutMillis = timeout,
         )
         return result.fold(
             onSuccess = { payload ->
                 val text = payload["content"]
                     ?.let { it as? JsonArray }
-                    ?.firstOrNull { element ->
-                        element.jsonObject["type"]?.jsonPrimitive?.content == "text"
-                    }
+                    ?.firstOrNull { element -> element.jsonObject["type"]?.jsonPrimitive?.content == "text" }
                     ?.jsonObject
                     ?.get("text")
                     ?.jsonPrimitive
@@ -142,7 +182,41 @@ class OpenAiCompatibleProvider(private val settings: AiSettings) : AiProvider {
 
     override val id: String = "openai"
 
-    override suspend fun complete(systemPrompt: String, userText: String, maxTokens: Int): AiOutcome {
+    override suspend fun complete(systemPrompt: String, userText: String, maxTokens: Int): AiOutcome =
+        send(systemPrompt, maxTokens, 30_000) {
+            put("role", "user")
+            put("content", userText)
+        }
+
+    override suspend fun completeWithImage(
+        systemPrompt: String,
+        userText: String,
+        image: EncodedImage,
+        maxTokens: Int,
+    ): AiOutcome = send(systemPrompt, maxTokens, 90_000) {
+        put("role", "user")
+        putJsonArray("content") {
+            add(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", userText)
+                },
+            )
+            add(
+                buildJsonObject {
+                    put("type", "image_url")
+                    putJsonObject("image_url") { put("url", "data:${image.mediaType};base64,${image.base64}") }
+                },
+            )
+        }
+    }
+
+    private suspend fun send(
+        systemPrompt: String,
+        maxTokens: Int,
+        timeout: Int,
+        message: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): AiOutcome {
         val body = buildJsonObject {
             put("model", settings.model.ifBlank { AiProviderId.OPENAI.defaultModel })
             put("max_tokens", maxTokens)
@@ -154,18 +228,14 @@ class OpenAiCompatibleProvider(private val settings: AiSettings) : AiProvider {
                         put("content", systemPrompt)
                     },
                 )
-                add(
-                    buildJsonObject {
-                        put("role", "user")
-                        put("content", userText)
-                    },
-                )
+                add(buildJsonObject(message))
             }
         }
         val result = postJson(
             url = settings.baseUrl.trimEnd('/') + "/v1/chat/completions",
             headers = mapOf("Authorization" to "Bearer " + settings.apiKey),
             body = body,
+            timeoutMillis = timeout,
         )
         return result.fold(
             onSuccess = { payload ->
@@ -201,4 +271,30 @@ private fun Throwable.toFailure(): AiOutcome.Failure = when (this) {
     )
     is IOException -> AiOutcome.Failure("No connection to the assistant.", retryable = true)
     else -> AiOutcome.Failure("The assistant could not be reached.", retryable = false)
+}
+
+/** Models sometimes wrap JSON in prose or fences. This pulls out the first balanced object. */
+internal object JsonText {
+    fun firstObject(raw: String): String? {
+        val start = raw.indexOf('{')
+        if (start < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (index in start until raw.length) {
+            val ch = raw[index]
+            when {
+                escaped -> escaped = false
+                ch == '\\' && inString -> escaped = true
+                ch == '"' -> inString = !inString
+                inString -> Unit
+                ch == '{' -> depth++
+                ch == '}' -> {
+                    depth--
+                    if (depth == 0) return raw.substring(start, index + 1)
+                }
+            }
+        }
+        return null
+    }
 }

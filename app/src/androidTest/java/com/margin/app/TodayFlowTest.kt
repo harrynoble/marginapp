@@ -61,8 +61,11 @@ class TodayFlowTest {
 
         // The Now card always renders in one of these forms, whatever the time of day.
         composeRule.waitUntil(15_000) {
-            exists("Now") || exists("Ahead") || exists("In progress") || exists("At college")
+            exists("Now") || exists("Ahead") || exists("In progress") || exists("At college") ||
+                exists("Paused") || exists("min ago") || exists("complete")
         }
+        // The controls that reshape the day are always one tap away.
+        composeRule.onAllNodesWithText("Take a break").onFirst().assertIsDisplayed()
         composeRule.onAllNodesWithText("Today").onFirst().assertIsDisplayed()
     }
 
@@ -79,10 +82,34 @@ class TodayFlowTest {
 
         // The subject list comes straight from the seed; nothing was entered by hand.
         composeRule.onNode(hasScrollToKeyAction()).performScrollToKey("subjects")
-        awaitText("Revision weight")
-        composeRule.onAllNodesWithText("Revision weight", substring = true)
+        awaitText("Theory and lab are tracked separately")
+        composeRule.onAllNodesWithText("Theory and lab are tracked separately", substring = true)
             .onFirst()
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun examsAreReachableFromSettings() {
+        skipOnboardingIfShown()
+        composeRule.waitUntil(15_000) { describedExists("Settings") }
+        composeRule.onAllNodesWithContentDescription("Settings").onFirst().performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNode(hasScrollToKeyAction()).performScrollToKey("college")
+        composeRule.onAllNodesWithText("Exams").onFirst().performClick()
+        composeRule.waitForIdle()
+
+        awaitText("Import from a Photo or PDF")
+    }
+
+    @Test
+    fun lightenTodayAsksWhatMatters() {
+        skipOnboardingIfShown()
+        composeRule.waitUntil(15_000) { exists("Lighten today") || exists("Light day") }
+        if (exists("Lighten today")) {
+            composeRule.onAllNodesWithText("Lighten today").onFirst().performClick()
+            awaitText("What absolutely needs to happen today?")
+        }
     }
 
     @Test

@@ -34,11 +34,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PlayCircle
-import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.Icon
@@ -46,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -64,7 +66,10 @@ import com.margin.app.core.MarginTime
 import com.margin.app.data.prefs.UserPreferences
 import com.margin.app.ui.components.DaySky
 import com.margin.app.ui.components.DurationRow
+import com.margin.app.ui.components.FormTextField
+import com.margin.app.ui.components.GroupedRow
 import com.margin.app.ui.components.GroupedSection
+import com.margin.app.ui.components.IosSwitch
 import com.margin.app.ui.components.PrimaryButton
 import com.margin.app.ui.components.RowSeparator
 import com.margin.app.ui.components.TextAction
@@ -75,24 +80,28 @@ import com.margin.app.ui.theme.MarginTheme
 import com.margin.app.ui.theme.SmoothRoundedCornerShape
 import com.margin.app.ui.theme.Space
 
-private const val LAST_STEP = 3
+private const val LAST_STEP = 4
 
 /**
  * Apple's welcome pattern: the app icon, a bold centred title, four features in a column, and
- * one button. Setup after that is three short pages, every value already sensibly filled, and
+ * one button. Setup after that is four short pages, every value already sensibly filled, and
  * all of it skippable. Nothing here asks for the timetable; it is already built in.
  */
 @Composable
 fun OnboardingScreen(
     viewModel: SettingsViewModel,
     onFinish: () -> Unit,
+    onSaveGoals: (project: String?, learning: String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val colors = MarginTheme.colors
     var step by rememberSaveable { mutableIntStateOf(0) }
+    var projectDraft by rememberSaveable { mutableStateOf("") }
+    var learningDraft by rememberSaveable { mutableStateOf("") }
 
     fun finish(notifications: Boolean?) {
+        onSaveGoals(projectDraft.trim().ifBlank { null }, learningDraft.trim().ifBlank { null })
         viewModel.update { prefs ->
             prefs.copy(
                 onboardingComplete = true,
@@ -140,7 +149,13 @@ fun OnboardingScreen(
                     when (page) {
                         0 -> WelcomePage()
                         1 -> DayPage(state.prefs, viewModel)
-                        2 -> ProtectPage(state.prefs, viewModel)
+                        2 -> StudyPage(state.prefs, viewModel)
+                        3 -> GoalsPage(
+                            project = projectDraft,
+                            onProject = { projectDraft = it },
+                            learning = learningDraft,
+                            onLearning = { learningDraft = it },
+                        )
                         else -> NotificationsPage()
                     }
                 }
@@ -208,7 +223,7 @@ private fun WelcomePage() {
                 icon = Icons.Rounded.CalendarMonth,
                 color = accents.indigo,
                 title = "Plans around your day",
-                body = "College, travel and meals go in first. Your work fits into what's left.",
+                body = "College and travel go in first. Every subject, theory and lab, gets its turn.",
             )
             Feature(
                 icon = Icons.Rounded.Spa,
@@ -248,7 +263,8 @@ private fun AppIcon() {
     }
 }
 
-private val IconGround = Color(0xFF16302A)
+/** The wordmark is white on black, as on the launcher. */
+private val IconGround = Color(0xFF000000)
 
 @Composable
 private fun Feature(icon: ImageVector, color: Color, title: String, body: String) {
@@ -324,28 +340,48 @@ private fun DayPage(prefs: UserPreferences, viewModel: SettingsViewModel) {
 }
 
 @Composable
-private fun ProtectPage(prefs: UserPreferences, viewModel: SettingsViewModel) {
+private fun StudyPage(prefs: UserPreferences, viewModel: SettingsViewModel) {
     PageHeader(
-        icon = Icons.Rounded.Shield,
-        color = MarginTheme.accents.green,
-        title = "What Margin protects",
-        body = "These are floors. Work is placed around them, never through them.",
+        icon = Icons.Rounded.AutoStories,
+        color = MarginTheme.accents.indigo,
+        title = "How you study",
+        body = "Sessions start when you like to work. Leisure is a floor: work goes around it, never through it.",
     )
     GroupedSection {
+        GroupedRow(
+            title = "Prefer studying after",
+            trailing = {
+                IosSwitch(
+                    checked = prefs.hasStudyPreference,
+                    onCheckedChange = { v -> viewModel.update { it.copy(preferredStudyStart = if (v) 16 * 60 else -1) } },
+                )
+            },
+        )
+        if (prefs.hasStudyPreference) {
+            RowSeparator()
+            TimeRow(
+                title = "From",
+                minute = prefs.preferredStudyStart,
+                use24Hour = prefs.use24HourTime,
+                onChange = { m -> viewModel.update { it.copy(preferredStudyStart = m) } },
+            )
+        }
+        RowSeparator()
+        DurationRow(
+            title = "Session length",
+            minutes = prefs.studySessionMinutes,
+            onChange = { m -> viewModel.update { it.copy(studySessionMinutes = m) } },
+            min = 20,
+            max = 120,
+        )
+    }
+    GroupedSection(modifier = Modifier.padding(top = Space.l)) {
         DurationRow(
             title = "Daily leisure",
             minutes = prefs.minLeisureMinutes,
             onChange = { m -> viewModel.update { it.copy(minLeisureMinutes = m) } },
             step = 15,
             max = 8 * 60,
-        )
-        RowSeparator()
-        DurationRow(
-            title = "Build on weekdays",
-            minutes = prefs.buildMinutesWeekday,
-            onChange = { m -> viewModel.update { it.copy(buildMinutesWeekday = m) } },
-            step = 15,
-            max = 6 * 60,
         )
         RowSeparator()
         DurationRow(
@@ -356,6 +392,27 @@ private fun ProtectPage(prefs: UserPreferences, viewModel: SettingsViewModel) {
             min = 30,
             max = 12 * 60,
         )
+    }
+}
+
+@Composable
+private fun GoalsPage(
+    project: String,
+    onProject: (String) -> Unit,
+    learning: String,
+    onLearning: (String) -> Unit,
+) {
+    PageHeader(
+        icon = Icons.Rounded.Lightbulb,
+        color = MarginTheme.accents.orange,
+        title = "Beyond college",
+        body = "Something you are building and something you want to learn. Margin offers time for both " +
+            "once academics are handled, and not today is always an answer.",
+    )
+    GroupedSection(footer = "Both are optional. Add more later in Tasks.") {
+        FormTextField(value = project, onValueChange = onProject, placeholder = "A project you're building")
+        RowSeparator()
+        FormTextField(value = learning, onValueChange = onLearning, placeholder = "A skill you want to learn")
     }
 }
 

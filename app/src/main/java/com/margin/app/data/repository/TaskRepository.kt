@@ -39,6 +39,10 @@ class TaskRepository(
 
     suspend fun activeTasks(): List<Task> = taskDao.activeTasks().map { it.toDomain() }
 
+    suspend fun allTasks(): List<Task> = taskDao.all().map { it.toDomain() }
+
+    suspend fun allEvents(): List<CalendarEvent> = eventDao.all().map { it.toDomain() }
+
     suspend fun create(task: Task): Long {
         val now = System.currentTimeMillis()
         return taskDao.insert(task.copy(createdAt = if (task.createdAt == 0L) now else task.createdAt).toEntity())

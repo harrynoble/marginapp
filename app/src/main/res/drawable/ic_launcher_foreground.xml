@@ -1,21 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The wordmark: "margin." in a heavy geometric lowercase, white on black, with the full stop
+    as the only colour. Drawn as geometry rather than set in a font:
+
+    - x-height 40 units, baseline at 60, strokes 9.5 (about a quarter of the x-height)
+    - bowls are true circles; a and g are single-storey, closed by a straight stem
+    - stems end flat at the x-height and the baseline; the r shoulder ends in a vertical cut
+    - tight, even spacing; the full stop sits close to the n, slightly larger than a stroke
+
+    The 244-unit wordmark is scaled to a quarter and centred on its x-height band, which keeps
+    every point inside the 66dp safe circle of the 108dp adaptive icon.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- The margin rule: a single vertical line with the day's blocks set against it. -->
-    <path
-        android:fillColor="#E8E3D8"
-        android:pathData="M38,30 h3 v48 h-3 z" />
-    <path
-        android:fillColor="#E8E3D8"
-        android:pathData="M48,32 h24 a2,2 0 0 1 2,2 v8 a2,2 0 0 1 -2,2 h-24 a2,2 0 0 1 -2,-2 v-8 a2,2 0 0 1 2,-2 z" />
-    <path
-        android:fillColor="#8FB8A6"
-        android:pathData="M48,49 h16 a2,2 0 0 1 2,2 v8 a2,2 0 0 1 -2,2 h-16 a2,2 0 0 1 -2,-2 v-8 a2,2 0 0 1 2,-2 z" />
-    <path
-        android:fillColor="#E8E3D8"
-        android:fillAlpha="0.55"
-        android:pathData="M48,66 h21 a2,2 0 0 1 2,2 v8 a2,2 0 0 1 -2,2 h-21 a2,2 0 0 1 -2,-2 v-8 a2,2 0 0 1 2,-2 z" />
+    <group
+        android:translateX="23.5"
+        android:translateY="44"
+        android:scaleX="0.25"
+        android:scaleY="0.25">
+        <!-- m a r g i n -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="9.5"
+            android:strokeLineCap="butt"
+            android:strokeLineJoin="round"
+            android:pathData="M4.5,60 V20
+                M4.5,36 A11.5,11.5 0 0 1 27.5,36 V60
+                M27.5,36 A11.5,11.5 0 0 1 50.5,36 V60
+                M65.5,40 A15.5,15.5 0 1 0 96.5,40 A15.5,15.5 0 1 0 65.5,40 Z
+                M96.5,20 V60
+                M111.5,60 V20
+                M111.5,42 C111.5,30 118,24.5 128,24.5
+                M136.5,40 A15.5,15.5 0 1 0 167.5,40 A15.5,15.5 0 1 0 136.5,40 Z
+                M167.5,20 V58 A15.5,13.5 0 0 1 138.58,64.75
+                M182.5,60 V20
+                M197.5,60 V20
+                M197.5,37 A12.5,12.5 0 0 1 222.5,37 V60" />
+        <!-- the dot of the i -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M177,8.5 a5.5,5.5 0 1 0 11,0 a5.5,5.5 0 1 0 -11,0 Z" />
+        <!-- the full stop -->
+        <path
+            android:fillColor="#F5A524"
+            android:pathData="M232,54 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z" />
+    </group>
 </vector>

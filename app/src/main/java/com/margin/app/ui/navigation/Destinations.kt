@@ -18,6 +18,7 @@ object Routes {
     const val INSIGHTS = "insights"
     const val SETTINGS = "settings"
     const val TIMETABLE = "timetable"
+    const val EXAMS = "exams"
     const val FOCUS = "focus/{blockId}"
 
     fun focus(blockId: Long) = "focus/$blockId"

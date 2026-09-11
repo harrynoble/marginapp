@@ -89,12 +89,16 @@ import kotlin.math.abs
 fun FocusScreen(
     viewModel: FocusViewModel,
     onClose: () -> Unit,
+    onOpenNext: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.finished) {
         if (state.finished) onClose()
+    }
+    LaunchedEffect(state.startedNext) {
+        state.startedNext?.let(onOpenNext)
     }
     ImmersiveWindow()
 
@@ -163,6 +167,7 @@ private fun FocusContent(
                     text = listOfNotNull(
                         if (state.running) "FOCUS" else "PAUSED",
                         labelFor(block.type).takeIf { !it.equals(block.title, ignoreCase = true) }?.uppercase(),
+                        block.academicType?.label?.uppercase(),
                     ).joinToString(" · "),
                     style = AppleType.footnoteEmphasized.copy(letterSpacing = 0.6.sp),
                     color = colors.secondaryLabel,
@@ -218,10 +223,43 @@ private fun FocusContent(
                 Text(
                     text = MarginTime.formatTime(block.start, state.use24Hour) + " – " +
                         MarginTime.formatTime(block.end, state.use24Hour) + "  ·  " +
-                        MarginTime.formatDuration(block.duration) + " planned",
+                        MarginTime.formatDuration(state.plannedMinutes) + " planned" +
+                        (if (block.extendedMinutes > 0) " · +" + MarginTime.formatDuration(block.extendedMinutes) else ""),
                     style = AppleType.footnote.copy(fontFeatureSettings = "tnum"),
                     color = colors.secondaryLabel,
                 )
+
+                val next = state.next
+                if (overrun && state.running) {
+                    // The planned time is up. Nothing is forced: move on, or keep going and the
+                    // extra time is recorded against this subject.
+                    Spacer(Modifier.height(Space.xl))
+                    Text(
+                        text = if (next != null) {
+                            MarginTime.formatDuration(state.plannedMinutes + block.extendedMinutes) + " complete. Next: " + next.title
+                        } else {
+                            MarginTime.formatDuration(state.plannedMinutes + block.extendedMinutes) + " complete."
+                        },
+                        style = AppleType.subheadline,
+                        color = colors.label,
+                        textAlign = TextAlign.Center,
+                    )
+                } else if (state.breakDue != null) {
+                    val suggestion = state.breakDue
+                    Spacer(Modifier.height(Space.xl))
+                    Text(
+                        text = MarginTime.formatDuration(suggestion.run.minutes) + " of work without a real break.",
+                        style = AppleType.subheadline,
+                        color = colors.label,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(Space.s))
+                    GlassChip(
+                        backdrop = backdrop,
+                        text = "Take ${suggestion.suggestedMinutes} min",
+                        onClick = { viewModel.takeBreak(suggestion.suggestedMinutes) },
+                    )
+                }
 
                 Spacer(Modifier.height(36.dp))
                 Row(
@@ -229,14 +267,15 @@ private fun FocusContent(
                     horizontalArrangement = Arrangement.spacedBy(Space.m),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    val moveOn = overrun && state.running && next != null
                     PrimaryButton(
-                        text = "Finish",
+                        text = if (moveOn) "Move to next" else "Finish",
                         icon = Icons.Rounded.CheckCircle,
                         color = accent,
                         height = 56.dp,
                         onClick = {
                             Haptics.confirm(view)
-                            viewModel.complete()
+                            if (moveOn) viewModel.moveToNext() else viewModel.complete()
                         },
                         modifier = Modifier.weight(1f),
                     )
@@ -253,23 +292,39 @@ private fun FocusContent(
                 }
 
                 Spacer(Modifier.height(Space.xl))
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    listOf(10, 15, 30).forEach { extra ->
-                        GlassChip(backdrop = backdrop, text = "+$extra min", onClick = { viewModel.extend(extra) })
+                if (overrun && state.running) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        GlassChip(backdrop = backdrop, text = "Continue 15 min", onClick = { viewModel.continueSession(15) })
+                        GlassChip(backdrop = backdrop, text = "Continue 30 min", onClick = { viewModel.continueSession(30) })
                     }
-                }
-                Spacer(Modifier.height(Space.s))
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    GlassChip(
-                        backdrop = backdrop,
-                        text = "Later today",
-                        onClick = { viewModel.skip(SkipResolution.LATER_TODAY) },
-                    )
-                    GlassChip(
-                        backdrop = backdrop,
-                        text = "Tomorrow",
-                        onClick = { viewModel.skip(SkipResolution.TOMORROW) },
-                    )
+                    if (next != null) {
+                        Spacer(Modifier.height(Space.s))
+                        GlassChip(backdrop = backdrop, text = "Finish here", onClick = { viewModel.complete() })
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        listOf(10, 15, 30).forEach { extra ->
+                            GlassChip(backdrop = backdrop, text = "+$extra min", onClick = { viewModel.extend(extra) })
+                        }
+                    }
+                    Spacer(Modifier.height(Space.s))
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        GlassChip(
+                            backdrop = backdrop,
+                            text = "Later today",
+                            onClick = { viewModel.skip(SkipResolution.LATER_TODAY) },
+                        )
+                        GlassChip(
+                            backdrop = backdrop,
+                            text = "Tomorrow",
+                            onClick = { viewModel.skip(SkipResolution.TOMORROW) },
+                        )
+                        GlassChip(
+                            backdrop = backdrop,
+                            text = "Skip today",
+                            onClick = { viewModel.skip(SkipResolution.DROP_TODAY) },
+                        )
+                    }
                 }
 
                 if (state.links.isNotEmpty()) {

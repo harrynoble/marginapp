@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -39,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.Category
+import com.margin.app.domain.model.LearningGoal
 import com.margin.app.domain.model.Priority
 import com.margin.app.domain.model.Project
 import com.margin.app.domain.model.Task
@@ -74,6 +76,8 @@ fun TasksScreen(viewModel: TasksViewModel, modifier: Modifier = Modifier) {
     var creating by remember { mutableStateOf(false) }
     var editingProject by remember { mutableStateOf<Project?>(null) }
     var creatingProject by remember { mutableStateOf(false) }
+    var editingGoal by remember { mutableStateOf<LearningGoal?>(null) }
+    var creatingGoal by remember { mutableStateOf(false) }
 
     RegisterAddAction { creating = true }
 
@@ -168,6 +172,68 @@ fun TasksScreen(viewModel: TasksViewModel, modifier: Modifier = Modifier) {
                 }
             }
         }
+
+        item(key = "goals-title") {
+            SectionTitle(
+                text = "Learning",
+                trailing = if (state.goals.isEmpty()) null else "New",
+                onTrailing = { creatingGoal = true },
+            )
+        }
+        item(key = "goals") {
+            GroupedSection {
+                if (state.goals.isEmpty()) {
+                    GroupedRow(
+                        title = "New Learning Goal",
+                        subtitle = "A skill to learn alongside college, offered when there is room",
+                        titleColor = MarginTheme.colors.tint,
+                        onClick = { creatingGoal = true },
+                    )
+                } else {
+                    state.goals.forEachIndexed { index, goal ->
+                        if (index > 0) RowSeparator(inset = 58.dp)
+                        GroupedRow(
+                            title = goal.name,
+                            subtitle = listOfNotNull(
+                                if (goal.weeklyTargetMinutes > 0) MarginTime.formatDuration(goal.weeklyTargetMinutes) + " a week" else null,
+                                MarginTime.formatDuration(goal.sessionMinutes) + " sessions",
+                                if (!goal.active) "Paused" else null,
+                            ).joinToString(" · "),
+                            titleColor = if (goal.active) MarginTheme.colors.label else MarginTheme.colors.secondaryLabel,
+                            leading = { IconTile(Icons.Rounded.Lightbulb, MarginTheme.accents.teal) },
+                            showChevron = true,
+                            onClick = { editingGoal = goal },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (creatingGoal) {
+        GoalSheet(
+            goal = null,
+            onDismiss = { creatingGoal = false },
+            onSave = {
+                viewModel.saveGoal(it)
+                creatingGoal = false
+            },
+        )
+    }
+
+    editingGoal?.let { goal ->
+        GoalSheet(
+            goal = goal,
+            onDismiss = { editingGoal = null },
+            onSave = {
+                viewModel.saveGoal(it)
+                editingGoal = null
+            },
+            onDelete = {
+                viewModel.deleteGoal(goal.id)
+                editingGoal = null
+            },
+        )
     }
 
     if (creating) {

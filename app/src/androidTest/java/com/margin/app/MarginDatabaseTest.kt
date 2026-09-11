@@ -6,13 +6,19 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.margin.app.data.db.MarginDatabase
 import com.margin.app.data.db.toDomain
 import com.margin.app.data.db.toEntity
+import com.margin.app.data.repository.DayRepository
+import com.margin.app.data.repository.ExamRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
 import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.data.seed.TimetableSeed
+import com.margin.app.domain.model.AcademicType
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.Category
+import com.margin.app.domain.model.Decision
+import com.margin.app.domain.model.DeferredWork
+import com.margin.app.domain.model.Exam
 import com.margin.app.domain.model.ScheduleBlock
 import com.margin.app.domain.model.SkipResolution
 import com.margin.app.domain.model.Task
@@ -145,8 +151,9 @@ class MarginDatabaseTest {
             ),
         )
 
-        schedule.replacePlanned(
+        schedule.replacePlannedFrom(
             today,
+            0,
             listOf(
                 ScheduleBlock(
                     date = today,
@@ -179,7 +186,7 @@ class MarginDatabaseTest {
                 locked = true,
             ),
         )
-        schedule.replacePlanned(today, emptyList())
+        schedule.replacePlannedFrom(today, 0, emptyList())
 
         assertNotNull(schedule.blocksFor(today).firstOrNull { it.title == "Pinned build" })
     }
@@ -226,6 +233,80 @@ class MarginDatabaseTest {
 
         assertEquals(1, tasks.eventsOn(today).size)
         assertEquals(0, tasks.eventsOn(today.plusDays(1)).size)
+    }
+
+    @Test
+    fun replanningFromNowKeepsTheRecordOfTheMorning() = runTest {
+        schedule.insert(
+            ScheduleBlock(date = today, start = 9 * 60, end = 10 * 60, type = BlockType.STUDY, title = "Morning study"),
+        )
+        schedule.insert(
+            ScheduleBlock(date = today, start = 17 * 60, end = 18 * 60, type = BlockType.STUDY, title = "Evening study"),
+        )
+
+        schedule.replacePlannedFrom(
+            today,
+            12 * 60,
+            listOf(ScheduleBlock(date = today, start = 18 * 60, end = 19 * 60, type = BlockType.STUDY, title = "Replanned")),
+        )
+
+        val titles = schedule.blocksFor(today).map { it.title }
+        assertTrue("a past session is part of the day's record", "Morning study" in titles)
+        assertTrue("Evening study" !in titles)
+        assertTrue("Replanned" in titles)
+    }
+
+    @Test
+    fun theSameWorkIsNeverDeferredTwice() = runTest {
+        val day = DayRepository(database.dayStateDao(), database.deferredWorkDao(), database.nudgeLogDao())
+        val work = DeferredWork(
+            sourceKey = "study:DSA:lab:1",
+            fromDate = today,
+            toDate = today.plusDays(1),
+            subjectCode = "DSA",
+            academicType = AcademicType.LAB,
+            title = "DSA lab",
+            minutes = 45,
+            reason = "Missed",
+        )
+        day.defer(listOf(work))
+        day.defer(listOf(work.copy(minutes = 30)))
+
+        val carried = day.deferredFor(today.plusDays(1))
+        assertEquals(1, carried.size)
+        assertEquals(AcademicType.LAB, carried.single().academicType)
+    }
+
+    @Test
+    fun choicesAboutTheDayRoundTrip() = runTest {
+        val day = DayRepository(database.dayStateDao(), database.deferredWorkDao(), database.nudgeLogDao())
+        day.update(today) {
+            it.copy(
+                lightDay = true,
+                essentials = setOf("subject:DSA"),
+                buildDecision = Decision.DECLINED,
+                outUntilMinute = 21 * 60,
+            )
+        }
+
+        val state = day.state(today)
+        assertTrue(state.lightDay)
+        assertEquals(setOf("subject:DSA"), state.essentials)
+        assertEquals(Decision.DECLINED, state.buildDecision)
+        assertEquals(21 * 60, state.outUntilMinute)
+        assertEquals("another day is untouched", false, day.state(today.plusDays(1)).lightDay)
+    }
+
+    @Test
+    fun examsKeepTheirTypeAndClearOnceDone() = runTest {
+        val exams = ExamRepository(database.examDao())
+        exams.upsert(
+            Exam(subjectCode = "DSA", title = "Data Structures", date = today.plusDays(10), academicType = AcademicType.LAB),
+        )
+
+        assertEquals(AcademicType.LAB, exams.upcoming(today).single().academicType)
+        exams.clearBefore(today.plusDays(11))
+        assertTrue(exams.upcoming(today).isEmpty())
     }
 
     @Test

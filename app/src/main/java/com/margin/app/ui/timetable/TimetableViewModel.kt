@@ -1,7 +1,12 @@
 package com.margin.app.ui.timetable
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.margin.app.ai.ImageEncoder
+import com.margin.app.ai.TimetableImport
+import com.margin.app.ai.VisionImporter
 import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.di.AppContainer
@@ -17,9 +22,17 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
+
+/** A timetable read from an image, waiting for the user to correct it. Nothing is saved yet. */
+data class TimetableImportState(
+    val importing: Boolean = false,
+    val review: TimetableImport? = null,
+    val error: String? = null,
+)
 
 data class TimetableUiState(
     val selectedDay: DayOfWeek = LocalDate.now().dayOfWeek,
@@ -29,6 +42,7 @@ data class TimetableUiState(
     val upcomingExceptions: List<TimetableException> = emptyList(),
     val use24Hour: Boolean = false,
     val loading: Boolean = true,
+    val import: TimetableImportState = TimetableImportState(),
 ) {
     val entriesForSelected: List<TimetableEntry>
         get() = entriesByDay[selectedDay].orEmpty().sortedBy { it.start }
@@ -42,25 +56,30 @@ class TimetableViewModel(
     private val preferencesRepository: PreferencesRepository,
     private val planningService: PlanningService,
     private val seedService: SeedService,
+    private val visionImporter: VisionImporter,
 ) : ViewModel() {
 
     private val selectedDay = MutableStateFlow(LocalDate.now().dayOfWeek)
+    private val importState = MutableStateFlow(TimetableImportState())
 
     val state: StateFlow<TimetableUiState> = combine(
         timetableRepository.observeEntries(),
         timetableRepository.observeSubjects(),
         timetableRepository.observeRoutines(),
         timetableRepository.observeExceptionsFrom(LocalDate.now()),
-        combine(preferencesRepository.preferences, selectedDay) { prefs, day -> prefs to day },
-    ) { entries, subjects, routines, exceptions, (prefs, day) ->
+        combine(preferencesRepository.preferences, selectedDay, importState) { prefs, day, import ->
+            Triple(prefs, day, import)
+        },
+    ) { entries, subjects, routines, exceptions, (prefs, day, import) ->
         TimetableUiState(
             selectedDay = day,
             entriesByDay = entries.groupBy { it.dayOfWeek },
             subjects = subjects,
-            routines = routines,
+            routines = routines.sortedBy { it.start },
             upcomingExceptions = exceptions.sortedBy { it.date },
             use24Hour = prefs.use24HourTime,
             loading = false,
+            import = import,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TimetableUiState())
 
@@ -133,12 +152,56 @@ class TimetableViewModel(
         planningService.replan(LocalDate.now())
     }
 
+    // ---- import ---------------------------------------------------------------------------------
+
+    /** Reads a timetable from a photo or PDF and holds it for review. */
+    fun importFrom(context: Context, uri: Uri) = viewModelScope.launch {
+        importState.value = TimetableImportState(importing = true)
+        val image = ImageEncoder.encode(context, uri)
+        if (image == null) {
+            importState.value = TimetableImportState(error = "That file could not be opened. Try a photo or a PDF.")
+            return@launch
+        }
+        val known = timetableRepository.allSubjects()
+        importState.value = when (val outcome = visionImporter.readTimetable(image, known)) {
+            is VisionImporter.TimetableOutcome.Success -> TimetableImportState(review = outcome.import)
+            is VisionImporter.TimetableOutcome.Failed -> TimetableImportState(error = outcome.message)
+        }
+    }
+
+    fun removeFromReview(entry: TimetableEntry) {
+        importState.update { current ->
+            val review = current.review ?: return@update current
+            current.copy(review = review.copy(entries = review.entries - entry))
+        }
+    }
+
+    /** Replaces the weekly timetable with the reviewed import. Subjects are added, never removed. */
+    fun confirmImport() = viewModelScope.launch {
+        val review = importState.value.review ?: return@launch
+        importState.value = TimetableImportState()
+        if (review.entries.isEmpty()) return@launch
+        val used = review.entries.mapNotNull { it.subjectCode }.toSet()
+        val existing = timetableRepository.allSubjects().map { it.code }.toSet()
+        review.subjects
+            .filter { it.code in used && it.code !in existing }
+            .forEach { timetableRepository.upsertSubject(it) }
+        timetableRepository.replaceAll(review.entries)
+        planningService.replan(LocalDate.now())
+        planningService.replan(LocalDate.now().plusDays(1))
+    }
+
+    fun cancelImport() {
+        importState.value = TimetableImportState()
+    }
+
     companion object {
         fun create(container: AppContainer) = TimetableViewModel(
             timetableRepository = container.timetableRepository,
             preferencesRepository = container.preferencesRepository,
             planningService = container.planningService,
             seedService = container.seedService,
+            visionImporter = container.visionImporter,
         )
     }
 }

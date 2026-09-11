@@ -1,5 +1,7 @@
 package com.margin.app.ui.timetable
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BeachAccess
+import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
@@ -26,11 +29,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.ExceptionType
+import com.margin.app.domain.model.Subject
 import com.margin.app.domain.model.TimetableEntry
 import com.margin.app.domain.model.TimetableException
 import com.margin.app.domain.model.TimetableKind
@@ -39,7 +44,7 @@ import com.margin.app.ui.components.ColorDot
 import com.margin.app.ui.components.GroupedRow
 import com.margin.app.ui.components.GroupedSection
 import com.margin.app.ui.components.IconTile
-import com.margin.app.ui.components.IosStepper
+import com.margin.app.ui.components.IosSwitch
 import com.margin.app.ui.components.LargeTitleScreen
 import com.margin.app.ui.components.RowSeparator
 import com.margin.app.ui.components.SegmentedControl
@@ -77,9 +82,15 @@ fun TimetableScreen(
     val colors = MarginTheme.colors
     val accents = MarginTheme.accents
     val backdrop = rememberGlassBackdrop()
+    val context = LocalContext.current
     var editing by remember { mutableStateOf<TimetableEntry?>(null) }
     var creating by remember { mutableStateOf(false) }
     var pickingDayOff by remember { mutableStateOf(false) }
+    var editingSubject by remember { mutableStateOf<Subject?>(null) }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importFrom(context.applicationContext, uri)
+    }
 
     val entries = state.entriesForSelected
     val allEntries = remember(state.entriesByDay) { state.entriesByDay.values.flatten() }
@@ -184,34 +195,61 @@ fun TimetableScreen(
             }
         }
 
+        item(key = "import") {
+            GroupedSection(
+                footer = state.import.error
+                    ?: "New semester? Read the timetable from a photo or PDF. You check every class before it replaces this one.",
+            ) {
+                GroupedRow(
+                    title = if (state.import.importing) "Reading the timetable…" else "Import from a Photo or PDF",
+                    titleColor = if (state.import.importing) colors.secondaryLabel else colors.tint,
+                    leading = { IconTile(Icons.Rounded.DocumentScanner, accents.blue) },
+                    onClick = if (state.import.importing) null else ({ picker.launch(arrayOf("image/*", "application/pdf")) }),
+                )
+            }
+        }
+
         if (state.subjects.isNotEmpty()) {
             item(key = "subjects") {
                 GroupedSection(
                     header = "Subjects",
-                    footer = "Revision weight sets how much review a subject earns for each hour of class. " +
-                        "1.0 is average.",
+                    footer = "Theory and lab are tracked separately, so neither is forgotten. Tap a subject to set how much it matters.",
                 ) {
                     state.subjects.forEachIndexed { index, subject ->
                         if (index > 0) RowSeparator(inset = Space.l + 12.dp + Space.m)
                         GroupedRow(
                             title = subject.name,
-                            subtitle = subject.code + " · Revision weight " +
-                                String.format(Locale.US, "%.1f", subject.reviewWeight),
+                            subtitle = listOf(
+                                subject.code,
+                                ImportanceLabels[subject.importance.coerceIn(0, 3)],
+                                subject.difficulty.label,
+                            ).joinToString(" · "),
                             leading = { ColorDot(color = subjectAccent(index), size = 12.dp) },
+                            showChevron = true,
+                            onClick = { editingSubject = subject },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (state.routines.isNotEmpty()) {
+            item(key = "routines") {
+                GroupedSection(
+                    header = "Routines",
+                    footer = "Meals are off by default: eat when it suits you, and take a meal break from Today. " +
+                        "Turn one on to have its time kept free.",
+                ) {
+                    state.routines.forEachIndexed { index, routine ->
+                        if (index > 0) RowSeparator()
+                        GroupedRow(
+                            title = routine.title,
+                            subtitle = MarginTime.formatTime(routine.start, state.use24Hour) + " – " +
+                                MarginTime.formatTime(routine.end, state.use24Hour),
                             trailing = {
-                                IosStepper(
-                                    onDecrement = {
-                                        viewModel.saveSubject(
-                                            subject.copy(reviewWeight = (subject.reviewWeight - 0.1f).coerceAtLeast(0f)),
-                                        )
-                                    },
-                                    onIncrement = {
-                                        viewModel.saveSubject(
-                                            subject.copy(reviewWeight = (subject.reviewWeight + 0.1f).coerceAtMost(3f)),
-                                        )
-                                    },
-                                    canDecrement = subject.reviewWeight > 0.05f,
-                                    canIncrement = subject.reviewWeight < 2.95f,
+                                IosSwitch(
+                                    checked = routine.active,
+                                    onCheckedChange = { viewModel.saveRoutine(routine.copy(active = it)) },
                                 )
                             },
                         )
@@ -261,6 +299,27 @@ fun TimetableScreen(
             } else {
                 null
             },
+        )
+    }
+
+    editingSubject?.let { subject ->
+        SubjectSheet(
+            subject = subject,
+            onDismiss = { editingSubject = null },
+            onSave = {
+                editingSubject = null
+                viewModel.saveSubject(it)
+            },
+        )
+    }
+
+    state.import.review?.let { review ->
+        TimetableReviewSheet(
+            review = review,
+            use24Hour = state.use24Hour,
+            onRemove = viewModel::removeFromReview,
+            onDismiss = viewModel::cancelImport,
+            onConfirm = viewModel::confirmImport,
         )
     }
 

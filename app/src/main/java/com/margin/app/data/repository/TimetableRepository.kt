@@ -35,10 +35,18 @@ class TimetableRepository(
 
     suspend fun subjects(): List<Subject> = subjectDao.activeSubjects().map { it.toDomain() }
 
+    suspend fun allSubjects(): List<Subject> = subjectDao.all().map { it.toDomain() }
+
     suspend fun subject(code: String?): Subject? =
         code?.let { subjectDao.byCode(it)?.toDomain() }
 
     suspend fun routines(): List<Routine> = routineDao.allActive().map { it.toDomain() }
+
+    /** Every routine, including the ones switched off, such as meals by default. */
+    suspend fun allRoutines(): List<Routine> = routineDao.all().map { it.toDomain() }
+
+    /** The whole recurring week, used for subject coverage and the lab and theory tracks. */
+    suspend fun weeklyEntries(): List<TimetableEntry> = timetableDao.allActive().map { it.toDomain() }
 
     /**
      * The classes that actually happen on [date]: the weekly pattern, minus anything
@@ -116,9 +124,9 @@ class TimetableRepository(
 
     suspend fun deleteEntry(entry: TimetableEntry) = timetableDao.delete(entry.toEntity())
 
+    /** Swaps the whole week in one transaction, so an import can never leave half a timetable. */
     suspend fun replaceAll(entries: List<TimetableEntry>) {
-        timetableDao.clear()
-        timetableDao.insertAll(entries.map { it.toEntity() })
+        timetableDao.replaceAll(entries.map { it.copy(id = 0).toEntity() })
     }
 
     suspend fun upsertSubject(subject: Subject) = subjectDao.upsert(subject.toEntity())

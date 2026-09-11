@@ -4,6 +4,9 @@ import com.margin.app.data.db.dao.CheckInDao
 import com.margin.app.data.db.dao.DailyPlanDao
 import com.margin.app.data.db.dao.HistoryDao
 import com.margin.app.data.db.dao.ScheduleDao
+import com.margin.app.data.db.decodePlannedWork
+import com.margin.app.data.db.encodePlannedWork
+import com.margin.app.data.db.entity.BreakRecordEntity
 import com.margin.app.data.db.entity.CompletionRecordEntity
 import com.margin.app.data.db.entity.DailyPlanEntity
 import com.margin.app.data.db.entity.RescheduleRecordEntity
@@ -12,16 +15,30 @@ import com.margin.app.data.db.entity.SkipRecordEntity
 import com.margin.app.data.db.toDomain
 import com.margin.app.data.db.toEntity
 import com.margin.app.domain.model.BlockStatus
+import com.margin.app.domain.model.BreakReason
+import com.margin.app.domain.model.BreakRecord
 import com.margin.app.domain.model.CompletionRecord
 import com.margin.app.domain.model.DailyCheckIn
 import com.margin.app.domain.model.DailyPlan
 import com.margin.app.domain.model.RescheduleRecord
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.domain.model.SkipKind
 import com.margin.app.domain.model.SkipRecord
 import com.margin.app.domain.model.SkipResolution
+import com.margin.app.domain.planner.PlannedWork
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
+
+/** What the last plan of a day said about itself. */
+data class PlanMeta(
+    val date: LocalDate,
+    val version: Int,
+    val headline: String?,
+    /** The day mode key: normal, light or minimum. */
+    val mode: String?,
+    val notes: List<String>,
+)
 
 class ScheduleRepository(
     private val scheduleDao: ScheduleDao,
@@ -56,10 +73,13 @@ class ScheduleRepository(
 
     suspend fun delete(id: Long) = scheduleDao.delete(id)
 
-    /** Replaces only the still-planned, unlocked blocks. Done and skipped history survives. */
-    suspend fun replacePlanned(date: LocalDate, blocks: List<ScheduleBlock>) {
+    /**
+     * Replaces the still-planned, unlocked blocks that end after [fromMinute]. Done, skipped,
+     * running and past blocks survive, so the record of the day is never rewritten.
+     */
+    suspend fun replacePlannedFrom(date: LocalDate, fromMinute: Int, blocks: List<ScheduleBlock>) {
         val entities: List<ScheduleBlockEntity> = blocks.map { it.copy(id = 0).toEntity() }
-        scheduleDao.replacePlanned(date.toEpochDay(), entities)
+        scheduleDao.replacePlannedFrom(date.toEpochDay(), fromMinute, entities)
     }
 
     suspend fun clearDay(date: LocalDate) = scheduleDao.clearDate(date.toEpochDay())
@@ -74,7 +94,28 @@ class ScheduleRepository(
     fun observePlan(date: LocalDate): Flow<DailyPlan?> =
         planDao.observeForDate(date.toEpochDay()).map { it?.toDomain() }
 
-    suspend fun savePlan(date: LocalDate, version: Int, headline: String?, energyMode: String) {
+    fun observePlanMeta(date: LocalDate): Flow<PlanMeta?> =
+        planDao.observeForDate(date.toEpochDay()).map { entity ->
+            entity?.let {
+                PlanMeta(
+                    date = date,
+                    version = it.version,
+                    headline = it.headline,
+                    mode = it.mode,
+                    notes = it.notes?.lines()?.filter { line -> line.isNotBlank() }.orEmpty(),
+                )
+            }
+        }
+
+    suspend fun savePlan(
+        date: LocalDate,
+        version: Int,
+        headline: String?,
+        energyMode: String,
+        work: List<PlannedWork> = emptyList(),
+        mode: String? = null,
+        notes: List<String> = emptyList(),
+    ) {
         planDao.upsert(
             DailyPlanEntity(
                 date = date.toEpochDay(),
@@ -82,9 +123,16 @@ class ScheduleRepository(
                 generatedAt = System.currentTimeMillis(),
                 headline = headline,
                 energyMode = energyMode,
+                workJson = encodePlannedWork(work),
+                mode = mode,
+                notes = notes.joinToString("\n").ifBlank { null },
             ),
         )
     }
+
+    /** The work the last plan of [date] intended, before anything was done. */
+    suspend fun plannedWork(date: LocalDate): List<PlannedWork> =
+        decodePlannedWork(planDao.forDate(date.toEpochDay())?.workJson)
 
     // ---- Check-in -------------------------------------------------------------------------
 
@@ -96,9 +144,15 @@ class ScheduleRepository(
 
     suspend fun saveCheckIn(checkIn: DailyCheckIn) = checkInDao.upsert(checkIn.toEntity())
 
+    suspend fun allCheckIns(): List<DailyCheckIn> = checkInDao.all().map { it.toDomain() }
+
     // ---- History ---------------------------------------------------------------------------
 
-    suspend fun recordCompletion(block: ScheduleBlock, minutes: Int) {
+    /**
+     * Records a finished session with everything the planner learns from: what it was, how
+     * long it was planned for, how long it took, and when in the day it started.
+     */
+    suspend fun recordCompletion(block: ScheduleBlock, minutes: Int, startMinute: Int? = null) {
         historyDao.insertCompletion(
             CompletionRecordEntity(
                 date = block.date.toEpochDay(),
@@ -108,11 +162,24 @@ class ScheduleRepository(
                 type = block.type.key,
                 minutes = minutes,
                 at = System.currentTimeMillis(),
+                subjectCode = block.subjectCode,
+                academicType = block.academicType?.key,
+                plannedMinutes = if (block.plannedMinutes > 0) block.plannedMinutes else block.duration,
+                startMinute = startMinute ?: block.start,
+                projectId = block.projectId,
+                learningGoalId = block.learningGoalId,
+                extendedMinutes = block.extendedMinutes,
+                title = block.title,
             ),
         )
     }
 
-    suspend fun recordSkip(block: ScheduleBlock, reason: String?, resolution: SkipResolution): Long =
+    suspend fun recordSkip(
+        block: ScheduleBlock,
+        reason: String?,
+        resolution: SkipResolution,
+        kind: SkipKind = SkipKind.SKIPPED,
+    ): Long =
         historyDao.insertSkip(
             SkipRecordEntity(
                 date = block.date.toEpochDay(),
@@ -122,6 +189,13 @@ class ScheduleRepository(
                 reason = reason,
                 resolution = resolution.name,
                 at = System.currentTimeMillis(),
+                kind = kind.key,
+                subjectCode = block.subjectCode,
+                academicType = block.academicType?.key,
+                plannedStart = block.plannedStart ?: block.start,
+                plannedMinutes = if (block.plannedMinutes > 0) block.plannedMinutes else block.duration,
+                category = block.category.key,
+                type = block.type.key,
             ),
         )
 
@@ -146,6 +220,25 @@ class ScheduleRepository(
         )
     }
 
+    suspend fun recordBreak(
+        date: LocalDate,
+        startMinute: Int,
+        plannedMinutes: Int,
+        reason: BreakReason,
+        actualMinutes: Int = plannedMinutes,
+    ) {
+        historyDao.insertBreak(
+            BreakRecordEntity(
+                date = date.toEpochDay(),
+                startMinute = startMinute,
+                plannedMinutes = plannedMinutes,
+                actualMinutes = actualMinutes,
+                reason = reason.key,
+                at = System.currentTimeMillis(),
+            ),
+        )
+    }
+
     fun observeCompletions(from: LocalDate, to: LocalDate): Flow<List<CompletionRecord>> =
         historyDao.observeCompletions(from.toEpochDay(), to.toEpochDay())
             .map { list -> list.map { it.toDomain() } }
@@ -158,6 +251,10 @@ class ScheduleRepository(
         historyDao.observeReschedules(from.toEpochDay(), to.toEpochDay())
             .map { list -> list.map { it.toDomain() } }
 
+    fun observeBreaks(from: LocalDate, to: LocalDate): Flow<List<BreakRecord>> =
+        historyDao.observeBreaks(from.toEpochDay(), to.toEpochDay())
+            .map { list -> list.map { it.toDomain() } }
+
     suspend fun completions(from: LocalDate, to: LocalDate): List<CompletionRecord> =
         historyDao.completions(from.toEpochDay(), to.toEpochDay()).map { it.toDomain() }
 
@@ -167,7 +264,18 @@ class ScheduleRepository(
     suspend fun reschedules(from: LocalDate, to: LocalDate): List<RescheduleRecord> =
         historyDao.reschedules(from.toEpochDay(), to.toEpochDay()).map { it.toDomain() }
 
+    suspend fun breaks(from: LocalDate, to: LocalDate): List<BreakRecord> =
+        historyDao.breaks(from.toEpochDay(), to.toEpochDay()).map { it.toDomain() }
+
     /** Blocks that were finished, skipped or are running. The planner must not touch these. */
     suspend fun settledBlocks(date: LocalDate): List<ScheduleBlock> =
         blocksFor(date).filter { it.status != BlockStatus.PLANNED || it.locked }
+
+    /** Deletes every record of what happened. Tasks, the timetable and settings are kept. */
+    suspend fun clearHistory() {
+        historyDao.clearCompletions()
+        historyDao.clearSkips()
+        historyDao.clearReschedules()
+        historyDao.clearBreaks()
+    }
 }
