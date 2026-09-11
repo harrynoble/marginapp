@@ -231,7 +231,7 @@ fun SettingsScreen(
                 footer = "These are floors. Work is placed around them, never through them.",
             ) {
                 DurationRow(
-                    title = "Leisure each day",
+                    title = "Daily leisure",
                     minutes = prefs.minLeisureMinutes,
                     onChange = { m -> set { it.copy(minLeisureMinutes = m) } },
                     step = 15,

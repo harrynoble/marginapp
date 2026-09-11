@@ -81,6 +81,15 @@ fun LargeTitleScreen(
         animationSpec = tween(durationMillis = 180),
         label = "inlineTitle",
     )
+    // As on iOS, the scroll edge only appears once content actually runs under the bar.
+    val scrolled by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+    }
+    val edgeAlpha by animateFloatAsState(
+        targetValue = if (scrolled) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "scrollEdge",
+    )
 
     Box(
         modifier = modifier
@@ -110,7 +119,8 @@ fun LargeTitleScreen(
 
         TopScrollEdge(
             backdrop = backdrop,
-            height = statusTop + Space.topBarHeight + 16.dp,
+            height = statusTop + Space.topBarHeight + 28.dp,
+            modifier = Modifier.graphicsLayer { alpha = edgeAlpha },
         )
 
         Text(

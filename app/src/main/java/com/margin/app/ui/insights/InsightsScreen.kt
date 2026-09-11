@@ -90,8 +90,12 @@ fun InsightsScreen(viewModel: InsightsViewModel, modifier: Modifier = Modifier) 
                                 color = colors.label,
                             )
                             Text(
-                                text = "${state.completedBlocks} finished · ${state.skippedBlocks} skipped · " +
-                                    "${state.rescheduled} moved",
+                                text = if (attempted == 0) {
+                                    "Nothing finished or skipped yet"
+                                } else {
+                                    "${state.completedBlocks} finished · ${state.skippedBlocks} skipped · " +
+                                        "${state.rescheduled} moved"
+                                },
                                 style = AppleType.subheadline,
                                 color = colors.secondaryLabel,
                             )

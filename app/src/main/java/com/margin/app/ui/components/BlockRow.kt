@@ -97,8 +97,11 @@ fun TimelineRow(
         time = MarginTime.formatTime(block.start, use24Hour),
         title = block.title,
         subtitle = buildList {
-            if (block.type != BlockType.FREE) add(labelFor(block.type))
-            block.subtitle?.let { add(it) }
+            // "Build · Build" says nothing; the type only earns a place when the title is different.
+            labelFor(block.type)
+                .takeIf { block.type != BlockType.FREE && !it.equals(block.title, ignoreCase = true) }
+                ?.let { add(it) }
+            block.subtitle?.takeIf { !it.equals(block.title, ignoreCase = true) }?.let { add(it) }
             if (skipped) add("Skipped")
         }.joinToString(" · ").ifBlank { null },
         duration = MarginTime.formatDurationShort(block.duration),

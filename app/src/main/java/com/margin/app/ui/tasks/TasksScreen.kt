@@ -134,7 +134,12 @@ fun TasksScreen(viewModel: TasksViewModel, modifier: Modifier = Modifier) {
         }
 
         item(key = "projects-title") {
-            SectionTitle(text = "Projects", trailing = "New", onTrailing = { creatingProject = true })
+            // With no projects yet, the row below is the way in; a second "New" would repeat it.
+            SectionTitle(
+                text = "Projects",
+                trailing = if (state.projects.isEmpty()) null else "New",
+                onTrailing = { creatingProject = true },
+            )
         }
         item(key = "projects") {
             GroupedSection {

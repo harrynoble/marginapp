@@ -1,9 +1,13 @@
 package com.margin.app
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -58,7 +62,17 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MarginTheme {
+            val dark = isSystemInDarkTheme()
+            // System bar icons follow the app theme, including when it flips while running;
+            // otherwise the clock goes dark-on-dark the moment the system switches to night.
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                )
+                onDispose {}
+            }
+            MarginTheme(darkTheme = dark) {
                 MarginApp(container = container)
             }
         }
@@ -75,5 +89,9 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val REARM_DEBOUNCE_MILLIS = 1_500L
+
+        // The scrims enableEdgeToEdge uses by default, kept for three-button navigation.
+        val LIGHT_SCRIM = Color.argb(0xE6, 0xFF, 0xFF, 0xFF)
+        val DARK_SCRIM = Color.argb(0x80, 0x1B, 0x1B, 0x1B)
     }
 }

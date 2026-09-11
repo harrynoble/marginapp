@@ -333,7 +333,7 @@ private fun ProtectPage(prefs: UserPreferences, viewModel: SettingsViewModel) {
     )
     GroupedSection {
         DurationRow(
-            title = "Leisure each day",
+            title = "Daily leisure",
             minutes = prefs.minLeisureMinutes,
             onChange = { m -> viewModel.update { it.copy(minLeisureMinutes = m) } },
             step = 15,

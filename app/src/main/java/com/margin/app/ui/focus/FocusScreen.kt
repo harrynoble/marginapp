@@ -160,7 +160,10 @@ private fun FocusContent(
             ) {
                 Spacer(Modifier.height(Space.topBarHeight + Space.xl))
                 Text(
-                    text = (if (state.running) "FOCUS" else "PAUSED") + " · " + labelFor(block.type).uppercase(),
+                    text = listOfNotNull(
+                        if (state.running) "FOCUS" else "PAUSED",
+                        labelFor(block.type).takeIf { !it.equals(block.title, ignoreCase = true) }?.uppercase(),
+                    ).joinToString(" · "),
                     style = AppleType.footnoteEmphasized.copy(letterSpacing = 0.6.sp),
                     color = colors.secondaryLabel,
                 )

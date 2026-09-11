@@ -36,6 +36,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -269,7 +270,11 @@ private fun WeekStrip(
     }
 }
 
-private val HourHeight: Dp = 64.dp
+private val HourHeight: Dp = 72.dp
+
+/** Blocks keep their true height; below this they switch to a single line, as Calendar does. */
+private val CompactBelow: Dp = 44.dp
+private val MinBlockHeight: Dp = 14.dp
 private val GutterWidth: Dp = 58.dp
 
 @Composable
@@ -347,7 +352,9 @@ private fun DayGrid(
         ) {
             items.forEach { item ->
                 val top = y(item.start)
-                val height = (perMinute * (item.end - item.start).toFloat()).coerceAtLeast(24.dp) - 2.dp
+                // True to the clock, so neighbouring blocks never overlap; 2dp keeps them apart.
+                val height = (perMinute * (item.end - item.start).toFloat() - 2.dp).coerceAtLeast(MinBlockHeight)
+                val compact = height < CompactBelow
                 when (item) {
                     is TimelineItem.College -> GridBlock(
                         title = "College",
@@ -357,6 +364,7 @@ private fun DayGrid(
                         color = railFor(BlockType.CLASS, Category.ACADEMICS),
                         faded = false,
                         struck = false,
+                        compact = compact,
                         modifier = Modifier
                             .offset(y = top)
                             .fillMaxWidth()
@@ -373,6 +381,7 @@ private fun DayGrid(
                             color = railFor(block.type, block.category),
                             faded = block.status == BlockStatus.DONE || block.status == BlockStatus.SKIPPED,
                             struck = block.status == BlockStatus.SKIPPED,
+                            compact = compact,
                             modifier = Modifier
                                 .offset(y = top)
                                 .fillMaxWidth()
@@ -418,6 +427,7 @@ private fun GridBlock(
     color: Color,
     faded: Boolean,
     struck: Boolean,
+    compact: Boolean,
     modifier: Modifier,
     onClick: (() -> Unit)?,
 ) {
@@ -425,7 +435,7 @@ private fun GridBlock(
     Row(
         modifier = modifier
             .alpha(if (faded) 0.55f else 1f)
-            .clip(MarginShape.block)
+            .clip(if (compact) MarginShape.small else MarginShape.block)
             .background(color.copy(alpha = if (colors.isDark) 0.30f else 0.16f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
@@ -435,26 +445,53 @@ private fun GridBlock(
                 .fillMaxHeight()
                 .background(color),
         )
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            Text(
-                text = title,
-                style = AppleType.footnoteEmphasized,
-                color = colors.label,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textDecoration = if (struck) TextDecoration.LineThrough else null,
-            )
-            Text(
-                text = listOfNotNull(time, detail).joinToString(" · "),
-                style = AppleType.caption1,
-                color = colors.secondaryLabel,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        if (compact) {
+            // A short block gets one line: the title, then its time, Calendar style.
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    style = AppleType.caption1.copy(fontWeight = FontWeight.SemiBold),
+                    color = colors.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = if (struck) TextDecoration.LineThrough else null,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = time,
+                    style = AppleType.caption1,
+                    color = colors.secondaryLabel,
+                    maxLines = 1,
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = AppleType.footnoteEmphasized,
+                    color = colors.label,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textDecoration = if (struck) TextDecoration.LineThrough else null,
+                )
+                Text(
+                    text = listOfNotNull(time, detail).joinToString(" · "),
+                    style = AppleType.caption1,
+                    color = colors.secondaryLabel,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

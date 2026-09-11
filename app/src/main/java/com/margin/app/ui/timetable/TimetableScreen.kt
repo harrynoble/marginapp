@@ -343,7 +343,9 @@ private fun EntryRow(
             )
             val meta = listOfNotNull(
                 entry.subjectCode?.takeIf { it != entry.title },
-                entry.kind.label.takeIf { entry.kind != TimetableKind.LECTURE },
+                entry.kind.label.takeIf {
+                    entry.kind != TimetableKind.LECTURE && !it.equals(entry.title, ignoreCase = true)
+                },
                 entry.faculty,
                 entry.location,
             ).joinToString(" · ")

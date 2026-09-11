@@ -270,14 +270,18 @@ fun TopScrollEdge(
                     drawRect(
                         brush = Brush.verticalGradient(
                             0f to Color.Black,
-                            0.5f to Color.Black.copy(alpha = 0.75f),
+                            0.62f to Color.Black,
                             1f to Color.Transparent,
                         ),
                         blendMode = BlendMode.DstIn,
                     )
+                    // Content under the status bar and the toolbar row recedes almost entirely,
+                    // so it never competes with the clock or the inline title; below that the
+                    // edge only softens and fades out.
                     drawRect(
                         brush = Brush.verticalGradient(
-                            0f to colors.groupedBackground.copy(alpha = 0.42f),
+                            0f to colors.groupedBackground.copy(alpha = 0.88f),
+                            0.62f to colors.groupedBackground.copy(alpha = 0.74f),
                             1f to colors.groupedBackground.copy(alpha = 0f),
                         ),
                     )
