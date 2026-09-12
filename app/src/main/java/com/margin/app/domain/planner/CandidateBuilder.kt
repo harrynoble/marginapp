@@ -57,6 +57,8 @@ data class PlanningContext(
     val prefs: PlannerPreferences,
     val settings: PlanSettings = PlanSettings(),
     val dayState: DayState = DayState(date),
+    /** The user marked this date as a holiday: no college, planned like a weekend. */
+    val holiday: Boolean = false,
     /** Set when replanning today; capacity is only counted from here. */
     val nowMinute: Int? = null,
     val classes: List<TimetableEntry> = emptyList(),
@@ -91,6 +93,7 @@ data class BuiltPlan(
     val quotas: List<QuotaCandidate>,
     val mode: DayMode,
     val exam: ExamPressure,
+    val dayType: DayType,
     /** Plain sentences for the user about decisions made today. */
     val notes: List<String>,
     /** What the day intends, before today's progress is subtracted. Used for carryover. */
@@ -118,10 +121,19 @@ object CandidateBuilder {
         val notes = mutableListOf<String>()
 
         // ---- the day's shape -----------------------------------------------------------
+        // A weekend or a holiday has no college, so it is an open day: a review of the whole
+        // week, more build and learning, and more rest. Exams still outrank all of that.
+        val openDay = DayType.isWeekend(date) || ctx.holiday
+        val dayType = DayType.of(date, ctx.holiday, exam.active)
         val light = ctx.dayState.lightDay
+        val leisureFloor = if (openDay && !exam.active) {
+            (ctx.prefs.minLeisureMinutes * OPEN_DAY_LEISURE_FACTOR).roundToInt()
+        } else {
+            ctx.prefs.minLeisureMinutes
+        }
         var prefs = ctx.prefs.copy(
             maxWorkMinutesPerDay = (ctx.prefs.maxWorkMinutesPerDay * exam.ceilingFactor).roundToInt(),
-            minLeisureMinutes = scaledLeisure(ctx.prefs.minLeisureMinutes, exam.leisureFactor),
+            minLeisureMinutes = scaledLeisure(leisureFloor, exam.leisureFactor),
             energyMode = if (light) EnergyMode.LIGHT else ctx.prefs.energyMode,
         )
 
@@ -149,19 +161,42 @@ object CandidateBuilder {
         val examStudy = examCandidates(ctx, prefs, exam, subjects, learned, studyWindow, epoch)
         val carried = carriedCandidates(ctx, studyWindow)
         val coveredTracks = (reviews + examStudy + carried).mapNotNull { trackOf(it) }.toSet()
-        val coverageStudy = coverageCandidates(
-            ctx = ctx,
-            prefs = prefs,
-            coverage = coverage,
-            subjects = subjects,
-            learned = learned,
-            studyWindow = studyWindow,
-            exclude = coveredTracks,
-            examActive = exam.active,
-            epoch = epoch,
-        )
+        // On an open day the weekly review covers every subject, so it replaces the daily
+        // top-up for neglected ones rather than doubling it.
+        val coverageStudy = if (openDay) {
+            emptyList()
+        } else {
+            coverageCandidates(
+                ctx = ctx,
+                prefs = prefs,
+                coverage = coverage,
+                subjects = subjects,
+                learned = learned,
+                studyWindow = studyWindow,
+                exclude = coveredTracks,
+                examActive = exam.active,
+                epoch = epoch,
+            )
+        }
+        val weekly = if (openDay) {
+            weeklyReviewCandidates(
+                ctx = ctx,
+                prefs = prefs,
+                coverage = coverage,
+                subjects = subjects,
+                learned = learned,
+                exam = exam,
+                studyWindow = studyWindow,
+                exclude = coveredTracks,
+                otherWork = (tasks + examStudy + carried).sumOf { it.minutes },
+                epoch = epoch,
+            )
+        } else {
+            WeeklyReview(emptyList(), emptyList())
+        }
+        if (openDay) notes += openDayNotes(ctx, dayType, weekly, subjects)
 
-        var candidates = (tasks + reviews + examStudy + carried + coverageStudy)
+        var candidates = (tasks + reviews + examStudy + carried + coverageStudy + weekly.candidates)
 
         // ---- the user's choices for today ---------------------------------------------
         val excluded = ctx.dayState.excludedSubjects
@@ -270,6 +305,7 @@ object CandidateBuilder {
             quotas = quotas,
             mode = mode,
             exam = exam,
+            dayType = dayType,
             notes = notes.distinct(),
             intended = intended,
             coverage = coverage,
@@ -303,8 +339,12 @@ object CandidateBuilder {
                 academicType = academic,
             )
         }
+        // Travel exists because of college. On a holiday, or any day without classes, there
+        // is nothing to travel to.
+        val collegeToday = ctx.classes.any { it.kind.isTeaching }
         for (routine in ctx.routines) {
             if (!routine.active || !routine.appliesTo(ctx.date.dayOfWeek)) continue
+            if (routine.kind == RoutineKind.COMMUTE && !collegeToday) continue
             out += Commitment(
                 id = "routine:${routine.id}",
                 title = routine.title,
@@ -450,17 +490,23 @@ object CandidateBuilder {
             Triple(track, minutes, entries.maxOf { it.range.end })
         }.sortedWith(compareByDescending<Triple<SubjectTrack, Float, Int>> { it.second }.thenBy { it.first.key })
 
-        val total = raw.sumOf { it.second.toDouble() }.toFloat()
-        val scale = if (total > prefs.maxReviewMinutesPerDay) prefs.maxReviewMinutesPerDay / total else 1f
+        // Every class taught today earns a review. The budget used to be handed out largest
+        // first, which starved the lightest subject on the busiest days (Economics on Tuesday
+        // and Thursday). Now each track gets the minimum first, and only then does the rest
+        // go to the subjects that need more.
+        val floor = prefs.minReviewSession
+        val budget = maxOf(prefs.maxReviewMinutesPerDay, floor * raw.size)
+        var left = budget - floor * raw.size
+        val allocated = raw.associate { (track, rawMinutes, _) ->
+            val wanted = prefs.roundUp(rawMinutes.roundToInt()).coerceAtLeast(floor)
+            val extra = prefs.roundDown(minOf(wanted - floor, left).coerceAtLeast(0))
+            left -= extra
+            track to floor + extra
+        }
 
-        var budget = prefs.maxReviewMinutesPerDay
         val out = mutableListOf<WorkCandidate>()
-        for ((track, rawMinutes, classEnd) in raw) {
-            if (budget < prefs.minReviewSession) break
-            val minutes = prefs.roundUp((rawMinutes * scale).roundToInt())
-                .coerceAtLeast(prefs.minReviewSession)
-                .coerceAtMost(budget)
-            if (minutes < prefs.minReviewSession) continue
+        for ((track, _, classEnd) in raw) {
+            val minutes = allocated.getValue(track)
             val subject = subjects[track.subjectCode]
             val short = subject?.shortName ?: track.subjectCode
             val lab = track.type == AcademicType.LAB
@@ -487,9 +533,186 @@ object CandidateBuilder {
                 preferredWindow = studyWindow,
                 reasons = reasons,
             )
-            budget -= minutes
         }
         return out
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Weekends and holidays: a review of the whole week
+    // ---------------------------------------------------------------------------------------
+
+    private data class WeeklyReview(val candidates: List<WorkCandidate>, val deferred: List<SubjectTrack>)
+
+    /**
+     * On a day without college, every subject track gets a session sized by how the week went:
+     * little or no study against a lot of teaching earns an hour, a subject already studied well
+     * gets a light touch. Exams and long neglect add weight; on Sunday, tomorrow's subjects come
+     * first. The total stays inside the day's work ceiling so the day never becomes a marathon;
+     * if even the minimums do not fit, the least urgent tracks wait and say so.
+     */
+    private fun weeklyReviewCandidates(
+        ctx: PlanningContext,
+        prefs: PlannerPreferences,
+        coverage: Map<SubjectTrack, TrackCoverage>,
+        subjects: Map<String, Subject>,
+        learned: LearnedPatterns,
+        exam: ExamPressure,
+        studyWindow: TimeRange?,
+        exclude: Set<SubjectTrack>,
+        otherWork: Int,
+        epoch: Long,
+    ): WeeklyReview {
+        val date = ctx.date
+        val weekStart = date.minusDays(7)
+        val tomorrow = date.plusDays(1).dayOfWeek
+        val tracks = coverage.keys
+            .filter { it !in exclude }
+            .filter { subjects[it.subjectCode]?.active != false }
+        if (tracks.isEmpty()) return WeeklyReview(emptyList(), emptyList())
+
+        data class Need(
+            val track: SubjectTrack,
+            val floor: Int,
+            val target: Int,
+            val importance: Int,
+            val studied: Int,
+            val reasons: List<String>,
+        )
+
+        val needs = tracks.map { track ->
+            val subject = subjects[track.subjectCode]
+            val short = subject?.shortName ?: track.subjectCode
+            val lab = track.type == AcademicType.LAB
+            val taught = ctx.weeklyEntries
+                .filter { it.kind.isTeaching && it.track == track }
+                .sumOf { it.range.duration }
+            val studied = ctx.completions
+                .filter { !it.date.isBefore(weekStart) && it.date.isBefore(date) }
+                .filter { it.subjectCode == track.subjectCode && it.academicType == track.type }
+                .sumOf { it.minutes }
+            val weight = subject?.reviewWeight ?: 1f
+            val labFactor = if (lab) ctx.settings.labReviewFactor else 1f
+            val expected = (taught / 60f * prefs.reviewMinutesPerTeachingHour * weight * labFactor).roundToInt()
+            val deficit = (expected - studied).coerceAtLeast(0)
+            val entry = coverage[track]
+            val neglected = entry != null && entry.neglectDays >= ctx.settings.coverageGapDays
+            val examDays = exam.daysByTrack[track]
+            val hasTomorrow = date.dayOfWeek == DayOfWeek.SUNDAY &&
+                ctx.weeklyEntries.any { it.dayOfWeek == tomorrow && it.kind.isTeaching && it.track == track }
+
+            val caughtUp = studied > 0 && deficit == 0
+            val floor = when {
+                caughtUp -> WEEKLY_LIGHT_FLOOR
+                lab -> WEEKLY_LAB_FLOOR
+                else -> WEEKLY_FLOOR
+            }
+            var target = when {
+                deficit >= 50 -> 60
+                deficit >= 25 -> 45
+                else -> floor
+            }
+            if (neglected) target += 15
+            if (examDays != null && examDays <= 10) target = maxOf(target, 60)
+            target = prefs.roundUp((target * learned.ratioFor(track.key)).roundToInt())
+                .coerceIn(floor, WEEKLY_MAX)
+
+            val importance = (entry?.let { CoverageCalculator.neglectScore(it, subject?.importance ?: 0) } ?: 0)
+                .plus(deficit / 4)
+                .plus(if (hasTomorrow) SUNDAY_TOMORROW_BONUS else 0)
+                .coerceAtMost(MAX_COVERAGE_IMPORTANCE) +
+                (examDays?.let { ExamPlanner.importanceFor(it) } ?: 0)
+
+            val reasons = buildList {
+                add("it is part of the weekly review")
+                when {
+                    studied == 0 -> add("$short had no study this week")
+                    caughtUp -> add("$short is already well covered this week")
+                    else -> add("$short had ${studied} min of study against $expected expected")
+                }
+                if (neglected) add("it has not been studied for ${entry!!.neglectDays} days")
+                if (hasTomorrow) add("you have it tomorrow")
+                if (examDays != null && examDays <= 10) add("the exam is ${daysPhrase(examDays)}")
+            }
+            Need(track, floor, target, importance, studied, reasons)
+        }.sortedWith(compareByDescending<Need> { it.importance }.thenBy { it.track.key })
+
+        // Everyone gets their minimum first, most urgent first; the rest of the budget then
+        // tops up the tracks that need more. The ceiling keeps room for build, learning and rest.
+        var left = (prefs.effectiveWorkCeiling - otherWork.coerceAtMost(prefs.effectiveWorkCeiling / 2)).coerceAtLeast(0)
+        val allocated = linkedMapOf<SubjectTrack, Int>()
+        for (need in needs) {
+            if (left >= need.floor) {
+                allocated[need.track] = need.floor
+                left -= need.floor
+            }
+        }
+        for (need in needs) {
+            val have = allocated[need.track] ?: continue
+            val extra = prefs.roundDown(minOf(need.target - have, left).coerceAtLeast(0))
+            allocated[need.track] = have + extra
+            left -= extra
+        }
+
+        val slowStart = prefs.wakeMinute + OPEN_DAY_SLOW_START
+        val candidates = needs.filter { it.track in allocated }.map { need ->
+            val track = need.track
+            val subject = subjects[track.subjectCode]
+            val name = subject?.name ?: track.subjectCode
+            val lab = track.type == AcademicType.LAB
+            val minutes = allocated.getValue(track)
+            WorkCandidate(
+                id = "weekly:${track.subjectCode}:${track.type.key}:$epoch",
+                minutes = minutes,
+                title = if (lab) "$name lab review" else "$name review",
+                subtitle = track.type.label + " · " + when {
+                    need.studied == 0 -> "no study this week"
+                    else -> "${need.studied} min this week"
+                },
+                type = BlockType.STUDY,
+                category = Category.ACADEMICS,
+                subjectCode = track.subjectCode,
+                academicType = track.type,
+                minSession = minutes,
+                maxSession = minutes,
+                earliestStart = slowStart,
+                difficulty = subject?.difficulty ?: Difficulty.MODERATE,
+                splittable = false,
+                importance = need.importance,
+                preferredWindow = studyWindow,
+                reasons = need.reasons,
+            )
+        }
+        return WeeklyReview(candidates, needs.map { it.track }.filter { it !in allocated })
+    }
+
+    private fun openDayNotes(
+        ctx: PlanningContext,
+        dayType: DayType,
+        weekly: WeeklyReview,
+        subjects: Map<String, Subject>,
+    ): List<String> = buildList {
+        when {
+            ctx.holiday -> add(
+                "Holiday: no college today. The extra time goes to reviewing your subjects, building, " +
+                    "learning and rest. Your weekly timetable is unchanged.",
+            )
+            dayType == DayType.WEEKEND || DayType.isWeekend(ctx.date) -> add(
+                "Weekend review: every subject gets time, weighted by how much it had this week. " +
+                    "Build and learning get more room, and leisure is kept.",
+            )
+        }
+        if (ctx.date.dayOfWeek == DayOfWeek.SUNDAY) {
+            val tomorrow = ctx.date.plusDays(1).dayOfWeek
+            val names = ctx.weeklyEntries
+                .filter { it.dayOfWeek == tomorrow && it.kind.isTeaching && it.subjectCode != null }
+                .mapNotNull { subjects[it.subjectCode]?.shortName ?: it.subjectCode }
+                .distinct()
+            if (names.isNotEmpty()) add("Tomorrow's subjects come first: ${names.joinToString(", ")}.")
+        }
+        if (weekly.deferred.isNotEmpty()) {
+            val names = weekly.deferred.map { subjects[it.subjectCode]?.shortName ?: it.subjectCode }.distinct()
+            add("Not everything fits today; ${names.joinToString(", ")} come first next time.")
+        }
     }
 
     // ---------------------------------------------------------------------------------------
@@ -708,8 +931,9 @@ object CandidateBuilder {
         val state = ctx.dayState
         if (!ctx.settings.buildEnabled || state.buildDecision == Decision.DECLINED) return null
         val accepted = state.buildDecision == Decision.ACCEPTED
-        val weekend = ctx.date.dayOfWeek == DayOfWeek.SATURDAY || ctx.date.dayOfWeek == DayOfWeek.SUNDAY
-        val base = state.buildMinutes ?: if (weekend) prefs.buildMinutesWeekend else prefs.buildMinutesWeekday
+        // A holiday has the same open time as a weekend, so it gets the weekend's build time.
+        val openDay = DayType.isWeekend(ctx.date) || ctx.holiday
+        val base = state.buildMinutes ?: if (openDay) prefs.buildMinutesWeekend else prefs.buildMinutesWeekday
         val target = if (accepted) base else (base * exam.buildFactor).roundToInt()
         val fromTasks = work.filter { it.category == Category.BUILD }.sumOf { it.minutes }
         val already = ctx.settled
@@ -757,9 +981,14 @@ object CandidateBuilder {
                 compareByDescending<LearningGoal> { it.weeklyTargetMinutes - (ctx.weekLearningByGoal[it.id] ?: 0) }
                     .thenBy { it.id },
             ).first()
-        val weekend = ctx.date.dayOfWeek == DayOfWeek.SATURDAY || ctx.date.dayOfWeek == DayOfWeek.SUNDAY
-        val base = state.learningMinutes ?: goal.sessionMinutes.takeIf { it > 0 }
-            ?: if (weekend) ctx.settings.learningMinutesWeekend else ctx.settings.learningMinutesWeekday
+        // Open days offer more learning time than a college day, never less than the goal's session.
+        val openDay = DayType.isWeekend(ctx.date) || ctx.holiday
+        val session = goal.sessionMinutes.takeIf { it > 0 }
+        val base = state.learningMinutes ?: if (openDay) {
+            maxOf(session ?: 0, ctx.settings.learningMinutesWeekend)
+        } else {
+            session ?: ctx.settings.learningMinutesWeekday
+        }
         val factor = if (accepted) 1f else exam.learningFactor(goal.pauseDuringExams)
         val already = ctx.settled
             .filter { it.type == BlockType.LEARN && it.status != BlockStatus.SKIPPED }
@@ -842,4 +1071,14 @@ object CandidateBuilder {
     private const val MIN_LEARNING_CHUNK = 20
     private const val MIN_EXAM_LEISURE = 45
     private const val OVERLOAD_TOLERANCE = 20
+
+    // Open days: weekends and holidays.
+    private const val OPEN_DAY_LEISURE_FACTOR = 1.5f
+    /** No review session before this long after waking on a day without college. */
+    private const val OPEN_DAY_SLOW_START = 90
+    private const val WEEKLY_FLOOR = 30
+    private const val WEEKLY_LAB_FLOOR = 25
+    private const val WEEKLY_LIGHT_FLOOR = 20
+    private const val WEEKLY_MAX = 75
+    private const val SUNDAY_TOMORROW_BONUS = 10
 }

@@ -16,6 +16,11 @@ Two stages: **CandidateBuilder** decides *what* the day should hold; **DayPlanne
 | `carry:<id>` | Work deferred from an earlier day |
 | `quota:leisure` / `quota:build` / `quota:learning` | Protected time |
 
+Every class taught today earns a review. Each track gets the minimum review first, and only
+then does the rest of the budget go to the subjects that need more. (Handing the budget out
+largest-first used to starve the lightest subject on the busiest days: Economics lost its
+review on Tuesday and Thursday.)
+
 Theory and lab are separate **tracks** (`SubjectTrack`). Coverage is computed per track, so
 a lab can never hide behind its theory. `neglectScore` grows with days untouched and a
 fairness term, and at most `maxCoveragePerDay` coverage sessions are added (one more in exam
@@ -23,6 +28,29 @@ mode), so no subject is ever forgotten and no day is flooded.
 
 Already-consumed work is subtracted before anything is placed (`Carryover.consumedMinutes`),
 so finishing a review early, or skipping a task to tomorrow, never brings it back today.
+
+### Day types
+
+The same engine shapes four kinds of day (`DayType`):
+
+| Day | What leads | Build and learning | Leisure |
+| --- | --- | --- | --- |
+| Weekday | College, then review of today's classes | Offered after academics | The floor |
+| Weekend | A weekly review of every subject | Weekend amounts | 1.5 × the floor |
+| Holiday | The same weekly review, for that date only | Weekend amounts | 1.5 × the floor |
+| Exam period | Exam preparation (outranks the others) | Scaled back | Scaled, never zero |
+
+**Weekly review (weekends and holidays).** Every theory and lab track gets a session sized by
+the week: teaching minutes × review rate × subject weight, against the study actually done.
+A subject with little or no study gets up to an hour; one already well covered gets a light
+20 minutes. Neglect and a close exam add weight. On Sunday, Monday's subjects come first.
+Everyone gets their minimum before anyone gets extra, and the total stays inside the day's
+work ceiling, so a weekend is comprehensive without becoming a marathon. Sessions start no
+earlier than 90 minutes after waking.
+
+**Holidays** are date-specific timetable exceptions (`ExceptionType.HOLIDAY`). The weekly
+timetable is never edited: that date's classes are simply not planned, travel to college is
+dropped with them, and the day is planned like a weekend. Undo removes the exception.
 
 ### Shaping the day
 
@@ -74,6 +102,10 @@ a replan only replaces planned blocks from now on.
   `carryForwardCap` minutes (60 per item, nothing under 15), one entry per source.
 
 ## Breaks
+
+When the day is replanned after a session, work finished just before (a gap of up to ten
+minutes still counts as one run) carries into the next break decision, so replanning after
+each session can never produce hours of back-to-back work.
 
 `BreakAdvisor` looks at the actual unbroken run of work, not a timer. A run that was
 extended, or a low-energy day, earns a break sooner; longer runs earn longer breaks. Taking a

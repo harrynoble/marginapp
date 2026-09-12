@@ -29,6 +29,8 @@ class MarginApplication : Application(), Configuration.Provider {
         scope.launch {
             runCatching {
                 container.seedService.seedIfNeeded()
+                // A key saved by an earlier version sits in plain text until it is re-saved.
+                container.aiSettingsRepository.ensureEncrypted()
                 // Close out any days the app was not opened on before building today, so
                 // yesterday's unfinished work is carried rather than forgotten.
                 container.dayRollover.run()

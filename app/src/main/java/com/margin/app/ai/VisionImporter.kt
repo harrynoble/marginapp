@@ -180,7 +180,45 @@ data class TimetableImport(
     val entries: List<TimetableEntry>,
     val subjects: List<Subject>,
     val warnings: List<String>,
+    /** Subject codes not already in the app. The review screen asks about each one. */
+    val newSubjectCodes: Set<String> = emptySet(),
 )
+
+/**
+ * Subject identity for imported timetables. Printed codes carry their type ("EE(T)" is an
+ * Economics tutorial); a code is matched to an existing subject only on an exact code, short
+ * name or full name, never on a loose resemblance.
+ */
+object SubjectCodes {
+
+    data class Split(val code: String?, val kind: TimetableKind?)
+
+    private val SUFFIX = Regex("""^(.*?)\s*[(\[]\s*(T|TUT|TUTORIAL|P|PR|PRACTICAL|L|LAB)\s*[)\]]\s*$""", RegexOption.IGNORE_CASE)
+    private val TITLE_SUFFIX = Regex("""\s*[(\[]\s*(T|TUT|TUTORIAL)\s*[)\]]\s*$""", RegexOption.IGNORE_CASE)
+
+    fun split(raw: String?): Split {
+        val text = raw?.trim().orEmpty()
+        if (text.isEmpty()) return Split(null, null)
+        val match = SUFFIX.matchEntire(text)
+            ?: return Split(text.replace(" ", "").uppercase(), null)
+        val base = match.groupValues[1].replace(" ", "").uppercase().ifBlank { null }
+        val kind = when (match.groupValues[2].uppercase()) {
+            "T", "TUT", "TUTORIAL" -> TimetableKind.TUTORIAL
+            else -> TimetableKind.LAB
+        }
+        return Split(base, kind)
+    }
+
+    fun cleanTitle(raw: String): String = raw.replace(TITLE_SUFFIX, "").trim()
+
+    fun resolve(code: String, title: String, known: List<Subject>): Subject? {
+        fun norm(value: String) = value.lowercase().replace(Regex("[^a-z0-9]"), "")
+        known.firstOrNull { norm(it.code) == norm(code) }?.let { return it }
+        known.firstOrNull { norm(it.shortName) == norm(code) }?.let { return it }
+        if (title.isNotBlank()) known.firstOrNull { norm(it.name) == norm(title) }?.let { return it }
+        return null
+    }
+}
 
 /**
  * Checks every extracted row: a real day, readable times in a plausible order, a sane length,
@@ -207,15 +245,19 @@ object TimetableImportValidator {
                 end <= start -> warnings += "Skipped $label: it ends before it starts."
                 end - start > MAX_MINUTES -> warnings += "Skipped $label: longer than six hours."
                 else -> {
-                    val kind = parseKind(row.kind)
-                    val code = row.subjectCode?.trim()?.uppercase()?.takeIf { it.isNotBlank() && kind != TimetableKind.RECESS }
-                        ?.let { raw -> known.firstOrNull { it.code.equals(raw, ignoreCase = true) }?.code ?: raw.take(10) }
+                    // "EE(T)" is Economics as a tutorial, not a new subject called "EE(T)".
+                    val split = SubjectCodes.split(row.subjectCode)
+                    var kind = parseKind(row.kind)
+                    if (split.kind != null && kind == TimetableKind.LECTURE) kind = split.kind
+                    val title = SubjectCodes.cleanTitle(row.title)
+                    val code = split.code?.takeIf { kind != TimetableKind.RECESS }
+                        ?.let { raw -> SubjectCodes.resolve(raw, title, known)?.code ?: raw.take(10) }
                     entries += TimetableEntry(
                         dayOfWeek = day,
                         start = start,
                         end = end,
                         subjectCode = code,
-                        title = row.title.trim().ifBlank { if (kind == TimetableKind.RECESS) "Recess" else code ?: "Class" },
+                        title = title.ifBlank { if (kind == TimetableKind.RECESS) "Recess" else code ?: "Class" },
                         kind = kind,
                         faculty = row.faculty?.trim()?.ifBlank { null },
                         location = row.location?.trim()?.ifBlank { null },
@@ -230,7 +272,9 @@ object TimetableImportValidator {
             .sortedWith(compareBy({ it.dayOfWeek.value }, { it.start }))
 
         val codes = unique.mapNotNull { it.subjectCode }.toSet()
-        val names = subjectNames.associate { it.first.trim().uppercase() to it.second.trim() }
+        val names = subjectNames
+            .mapNotNull { (code, name) -> SubjectCodes.split(code).code?.let { it to SubjectCodes.cleanTitle(name) } }
+            .toMap()
         val subjects = codes.sorted().mapIndexed { index, code ->
             known.firstOrNull { it.code == code } ?: Subject(
                 code = code,
@@ -241,7 +285,10 @@ object TimetableImportValidator {
                 colorIndex = index,
             )
         }
-        return TimetableImport(unique, subjects, warnings)
+        // Subjects the app has never seen are flagged for the user rather than merged with a
+        // lookalike: "Economics" and "Engineering Economics" may or may not be the same course.
+        val newCodes = codes.filter { code -> known.none { it.code == code } }.toSet()
+        return TimetableImport(unique, subjects, warnings, newCodes)
     }
 
     fun parseDay(raw: String): DayOfWeek? {

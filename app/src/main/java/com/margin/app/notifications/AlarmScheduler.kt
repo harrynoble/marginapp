@@ -8,8 +8,13 @@ import android.os.Build
 import com.margin.app.core.MarginTime
 import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.repository.DayRepository
+import com.margin.app.data.repository.ExamRepository
 import com.margin.app.data.repository.ScheduleRepository
+import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.domain.model.BlockStatus
+import com.margin.app.domain.model.ExceptionType
+import com.margin.app.domain.planner.DayType
+import com.margin.app.domain.planner.ExamPlanner
 import com.margin.app.domain.planner.Nudge
 import com.margin.app.domain.planner.NudgePlanner
 import com.margin.app.domain.planner.NudgeState
@@ -34,6 +39,8 @@ class AlarmScheduler(
     private val scheduleRepository: ScheduleRepository,
     private val preferencesRepository: PreferencesRepository,
     private val dayRepository: DayRepository,
+    private val timetableRepository: TimetableRepository,
+    private val examRepository: ExamRepository,
 ) {
 
     private val alarmManager: AlarmManager? = context.getSystemService(AlarmManager::class.java)
@@ -119,9 +126,17 @@ class AlarmScheduler(
                 activeStartMinute = activeStart,
                 posted = dayRepository.postedKeys(date),
             ),
-            settings = prefs.toNudgeSettings(date.toEpochDay()),
+            settings = prefs.toNudgeSettings(date.toEpochDay()).copy(dayType = dayTypeOf(date)),
             nowMinute = nowMinute,
         )
+    }
+
+    /** The same day type the planner used, so prompts describe the plan that was made. */
+    private suspend fun dayTypeOf(date: LocalDate): DayType {
+        val holiday = timetableRepository.exceptionsOn(date)
+            .any { it.type == ExceptionType.HOLIDAY && it.entryId == null }
+        val examActive = ExamPlanner.pressure(date, examRepository.upcoming(date)).active
+        return DayType.of(date, holiday, examActive)
     }
 
     private fun schedule(triggerAtMillis: Long) {

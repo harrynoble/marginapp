@@ -486,12 +486,20 @@ class DayPlanner {
         return Reservation(taken.sortedBy { it.range }, pool, remaining.coerceAtLeast(0))
     }
 
-    /** Minutes of back-to-back work that end exactly at [minute]. A break resets the count. */
+    /**
+     * Minutes of back-to-back work that end at [minute]. A gap of a few minutes (the rounding
+     * between a session finishing and the next being planned) does not count as rest; a break
+     * or anything else that is not work ends the run.
+     */
     private fun runEndingAt(blocks: List<PlacedBlock>, minute: Int): Int {
         var cursor = minute
         var total = 0
         while (true) {
-            val previous = blocks.firstOrNull { it.type.isWork && it.end == cursor } ?: break
+            val previous = blocks
+                .filter { it.end <= cursor && it.end >= cursor - RUN_GAP && it.duration > 0 }
+                .maxWithOrNull(compareBy({ it.end }, { it.start }))
+                ?: break
+            if (!previous.type.isWork) break
             total += previous.duration
             cursor = previous.start
         }
@@ -531,7 +539,10 @@ class DayPlanner {
         for (interval in free.sortedWith(compareBy({ it.start }, { it.end }))) {
             if (workBudget <= 0) break
             var cursor = interval.start
-            var runSinceBreak = 0
+            // Work already done just before this gap counts towards the next break. Without
+            // this, every replan after a finished session started the count from zero and the
+            // afternoon filled with back-to-back sessions.
+            var runSinceBreak = runEndingAt(settled + blocks, interval.start)
 
             while (cursor < interval.end && workBudget > 0) {
                 val available = interval.end - cursor
@@ -546,7 +557,21 @@ class DayPlanner {
                     workBudget = workBudget,
                     protectedLeft = protectedBudget - usedSoFar,
                     previousStarts = previousStarts,
-                ) ?: break
+                )
+                if (choice == null) {
+                    // Nothing may start yet, but something can later in this gap (a weekend
+                    // review waits for a slower morning; a review waits for its class). Move
+                    // on to that moment instead of giving up on the whole gap.
+                    val later = remaining.keys
+                        .mapNotNull { byId[it]?.earliestStart }
+                        .filter { it > cursor && it < interval.end }
+                        .minOrNull()
+                        ?: break
+                    val resume = prefs.roundUp(later)
+                    if (resume - cursor > RUN_GAP) runSinceBreak = 0
+                    cursor = resume
+                    continue
+                }
                 val candidate = choice.candidate
 
                 // A break is due before this session would push the run past the limit.
@@ -784,6 +809,8 @@ class DayPlanner {
         const val MIN_FRAGMENT = 10
         const val MIN_REPORTED_SHORTFALL = 10
         const val TRANSITION_RUN = 40
+        /** Minutes between two sessions that still count as one unbroken run of work. */
+        const val RUN_GAP = 10
         const val TRANSITION_BREAK = 10
         const val STICKY_BONUS = 12
         const val STICKY_TOLERANCE = 5

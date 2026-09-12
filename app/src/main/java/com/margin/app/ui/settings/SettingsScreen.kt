@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.margin.app.data.prefs.AiConnectionState
 import com.margin.app.data.prefs.AiProviderId
 import com.margin.app.data.prefs.UserPreferences
 import com.margin.app.ui.components.DurationRow
@@ -707,6 +708,7 @@ private fun ToggleRow(
 private fun AssistantSettings(state: SettingsUiState, viewModel: SettingsViewModel) {
     val colors = MarginTheme.colors
     val ai = state.ai
+    val testing by viewModel.connectionTesting.collectAsStateWithLifecycle()
     var modelDraft by remember(ai.provider) { mutableStateOf(ai.model) }
     var keyDraft by remember { mutableStateOf("") }
 
@@ -724,14 +726,27 @@ private fun AssistantSettings(state: SettingsUiState, viewModel: SettingsViewMod
     }
 
     if (ai.provider != AiProviderId.NONE) {
-        GroupedSection(header = "Connection") {
-            FormTextField(
-                value = modelDraft,
-                onValueChange = { value ->
-                    modelDraft = value
-                    viewModel.updateAi { it.copy(model = value.trim()) }
-                },
-                placeholder = ai.provider.defaultModel,
+        val label = ai.provider.label
+        // Connected only ever means a real, authenticated request succeeded.
+        val (status, statusColor) = when {
+            testing -> "Testing…" to colors.secondaryLabel
+            ai.apiKey.isBlank() -> "Not connected" to colors.secondaryLabel
+            ai.connection == AiConnectionState.CONNECTED -> "Connected" to colors.positive
+            ai.connection == AiConnectionState.FAILED -> "Not connected" to colors.destructive
+            else -> "Not tested" to colors.warning
+        }
+        GroupedSection(
+            header = "Connection",
+            footer = when {
+                testing -> "Making a real request to $label to check the key and the model."
+                ai.connectionMessage.isNotBlank() -> ai.connectionMessage
+                ai.apiKey.isBlank() -> "The key is encrypted on this device and only ever sent to $label."
+                else -> "This key has not been tested yet."
+            },
+        ) {
+            GroupedRow(
+                title = label,
+                trailing = { Text(text = status, style = AppleType.body, color = statusColor) },
             )
             RowSeparator()
             if (ai.apiKey.isBlank()) {
@@ -744,11 +759,11 @@ private fun AssistantSettings(state: SettingsUiState, viewModel: SettingsViewMod
                 )
                 RowSeparator()
                 GroupedRow(
-                    title = "Save Key",
-                    titleColor = if (keyDraft.isNotBlank()) colors.tint else colors.tertiaryLabel,
+                    title = if (testing) "Testing…" else "Save and Test",
+                    titleColor = if (keyDraft.isNotBlank() && !testing) colors.tint else colors.tertiaryLabel,
                     onClick = {
-                        if (keyDraft.isNotBlank()) {
-                            viewModel.updateAi { it.copy(apiKey = keyDraft.trim(), enabled = true) }
+                        if (keyDraft.isNotBlank() && !testing) {
+                            viewModel.saveKey(keyDraft)
                             keyDraft = ""
                         }
                     },
@@ -756,8 +771,28 @@ private fun AssistantSettings(state: SettingsUiState, viewModel: SettingsViewMod
             } else {
                 GroupedRow(title = "API key", value = ai.maskedKey)
                 RowSeparator()
+                GroupedRow(
+                    title = if (testing) "Testing…" else "Test Connection",
+                    titleColor = if (testing) colors.secondaryLabel else colors.tint,
+                    onClick = if (testing) null else ({ viewModel.testConnection() }),
+                )
+                RowSeparator()
                 GroupedRow(title = "Remove Key", titleColor = colors.destructive, onClick = viewModel::clearAiKey)
             }
+        }
+
+        GroupedSection(
+            header = "Model",
+            footer = "The connection test checks that this model is available to your key.",
+        ) {
+            FormTextField(
+                value = modelDraft,
+                onValueChange = { value ->
+                    modelDraft = value
+                    viewModel.updateAi { it.copy(model = value.trim()) }
+                },
+                placeholder = ai.provider.defaultModel,
+            )
         }
 
         GroupedSection(

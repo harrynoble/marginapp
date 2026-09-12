@@ -7,6 +7,7 @@ import com.margin.app.ai.context.ContextBuilder
 import com.margin.app.data.db.MarginDatabase
 import com.margin.app.data.prefs.AiSettingsRepository
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.prefs.TimetableReferenceRepository
 import com.margin.app.data.repository.DayRepository
 import com.margin.app.data.repository.ExamRepository
 import com.margin.app.data.repository.GoalRepository
@@ -91,9 +92,12 @@ class AppContainer(context: Context) {
         planningService = planningService,
     )
 
+    val timetableReferenceRepository = TimetableReferenceRepository(appContext)
+
     val seedService = SeedService(
         timetableRepository = timetableRepository,
         preferencesRepository = preferencesRepository,
+        referenceRepository = timetableReferenceRepository,
     )
 
     val alarmScheduler = AlarmScheduler(
@@ -101,6 +105,8 @@ class AppContainer(context: Context) {
         scheduleRepository = scheduleRepository,
         preferencesRepository = preferencesRepository,
         dayRepository = dayRepository,
+        timetableRepository = timetableRepository,
+        examRepository = examRepository,
     )
 
     private val contextBuilder = ContextBuilder(

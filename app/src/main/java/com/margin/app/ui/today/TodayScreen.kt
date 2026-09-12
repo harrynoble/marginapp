@@ -17,6 +17,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.DirectionsWalk
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.BatteryChargingFull
+import androidx.compose.material.icons.rounded.BeachAccess
+import androidx.compose.material3.AlertDialog
+import com.margin.app.domain.planner.DayType
+import com.margin.app.ui.components.TextAction
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.Settings
@@ -101,6 +105,7 @@ fun TodayScreen(
     var sheet by remember { mutableStateOf<TodaySheet?>(null) }
     var showEarlier by rememberSaveable { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(QuickChoice.NONE) }
+    var confirmHoliday by remember { mutableStateOf(false) }
 
     // A notification that needs an answer opens straight into the question it asked.
     LaunchedEffect(pending) {
@@ -152,7 +157,8 @@ fun TodayScreen(
 
     LargeTitleScreen(
         title = "Today",
-        eyebrow = state.date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())),
+        eyebrow = state.date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())) +
+            if (state.dayType == DayType.WEEKDAY) "" else " · " + state.dayType.label,
         backdrop = backdrop,
         modifier = modifier,
         background = { DaySky(minuteOfDay = state.nowMinute) },
@@ -238,6 +244,10 @@ fun TodayScreen(
                         } else {
                             QuickChip("Lighten today", Icons.Rounded.Spa) { sheet = TodaySheet.LIGHTEN }
                         }
+                        // Near the front, so it is found without scrolling on the mornings it matters.
+                        if (state.collegeToday && !state.holiday && !state.dayOver) {
+                            QuickChip("Mark as holiday", Icons.Rounded.BeachAccess) { confirmHoliday = true }
+                        }
                         QuickChip("Take a break", Icons.Rounded.Coffee) { choosing = QuickChoice.BREAK }
                         QuickChip(
                             text = "Energy: " + when (state.energyMode) {
@@ -256,6 +266,19 @@ fun TodayScreen(
         banner?.let { change ->
             item(key = "banner") {
                 ChangeCard(banner = change, onDismiss = viewModel::dismissBanner)
+            }
+        }
+
+        if (state.holiday) {
+            item(key = "holiday") {
+                NoticeCard(
+                    eyebrow = "HOLIDAY",
+                    eyebrowColor = accents.green,
+                    title = "No college today",
+                    body = "Your weekly timetable is unchanged; only today is off. The extra time goes to " +
+                        "reviewing your subjects, building, learning and rest.",
+                    secondary = "Undo" to { viewModel.unmarkHoliday() },
+                )
             }
         }
 
@@ -296,10 +319,12 @@ fun TodayScreen(
 
         state.buildOffer?.let { offer ->
             item(key = "build-offer") {
+                // Name the actual project; the block's own title is just the category.
+                val project = state.projects.firstOrNull { it.id == offer.projectId }?.name
                 NoticeCard(
                     eyebrow = "BUILD",
                     eyebrowColor = accents.orange,
-                    title = "Work on ${offer.subtitle ?: "your project"} today?",
+                    title = project?.let { "Work on $it today?" } ?: "Build time today?",
                     body = MarginTime.formatDuration(offer.duration) + " is free at " +
                         MarginTime.formatTime(offer.start, state.use24Hour) + ".",
                     primary = "Yes" to { viewModel.buildDecision(Decision.ACCEPTED, offer.projectId, offer.duration) },
@@ -315,7 +340,8 @@ fun TodayScreen(
                     eyebrow = "LEARNING",
                     eyebrowColor = accents.teal,
                     title = "Learn something new today?",
-                    body = (offer.subtitle?.let { "$it, " } ?: "") + MarginTime.formatDuration(offer.duration) +
+                    body = (state.goals.firstOrNull { it.id == offer.learningGoalId }?.name?.let { "$it, " } ?: "") +
+                        MarginTime.formatDuration(offer.duration) +
                         " at " + MarginTime.formatTime(offer.start, state.use24Hour) + ".",
                     primary = "Yes" to { viewModel.learningDecision(Decision.ACCEPTED, offer.learningGoalId, offer.duration) },
                     secondary = "Not today" to { viewModel.learningDecision(Decision.DECLINED) },
@@ -460,6 +486,30 @@ fun TodayScreen(
                 )
             }
         }
+    }
+
+    if (confirmHoliday) {
+        AlertDialog(
+            onDismissRequest = { confirmHoliday = false },
+            title = { Text("Mark today as a holiday?", style = AppleType.headline) },
+            text = {
+                Text(
+                    "Your normal timetable will not be treated as an active college day. I'll use the extra " +
+                        "time for academic review, building, learning, and leisure.",
+                    style = AppleType.subheadline,
+                    color = colors.secondaryLabel,
+                )
+            },
+            confirmButton = {
+                TextAction(text = "Confirm", emphasized = true, onClick = {
+                    confirmHoliday = false
+                    viewModel.markHoliday()
+                })
+            },
+            dismissButton = { TextAction(text = "Cancel", onClick = { confirmHoliday = false }) },
+            containerColor = colors.surface,
+            shape = MarginShape.card,
+        )
     }
 
     sheetBlock?.let { block ->

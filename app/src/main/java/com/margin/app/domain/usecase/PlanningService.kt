@@ -25,6 +25,8 @@ import com.margin.app.domain.planner.PlanDiff
 import com.margin.app.domain.planner.PlannedDay
 import com.margin.app.domain.planner.PlannerInput
 import com.margin.app.domain.planner.PlanningContext
+import com.margin.app.domain.planner.DayType
+import com.margin.app.domain.model.ExceptionType
 import com.margin.app.domain.planner.WorkCandidate
 import com.margin.app.domain.planner.WorkloadAllocator
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +47,7 @@ data class PlanResult(
     val notes: List<String> = emptyList(),
     val mode: DayMode = DayMode.NORMAL,
     val exam: ExamPressure = ExamPressure.NONE,
+    val dayType: DayType = DayType.WEEKDAY,
 )
 
 /**
@@ -128,6 +131,7 @@ class PlanningService(
             prefs = plannerPrefs,
             settings = prefs.toPlanSettings(),
             dayState = dayRepository.state(date),
+            holiday = isHoliday(date),
             nowMinute = nowMinute,
             classes = timetableRepository.entriesFor(date),
             weeklyEntries = timetableRepository.weeklyEntries(),
@@ -205,8 +209,13 @@ class PlanningService(
             notes = built.notes,
             mode = built.mode,
             exam = built.exam,
+            dayType = built.dayType,
         )
     }
+
+    /** A holiday is a date-specific exception; the weekly timetable itself is never touched. */
+    suspend fun isHoliday(date: LocalDate): Boolean =
+        timetableRepository.exceptionsOn(date).any { it.type == ExceptionType.HOLIDAY && it.entryId == null }
 
     /** Closes out planned work whose time has fully passed without it being started. */
     private suspend fun markMissed(date: LocalDate, nowMinute: Int) {

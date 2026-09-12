@@ -2,6 +2,9 @@ package com.margin.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.margin.app.ai.AiConnectionTester
+import com.margin.app.ai.ConnectionResult
+import com.margin.app.data.prefs.AiConnectionState
 import com.margin.app.data.prefs.AiProviderId
 import com.margin.app.data.prefs.AiSettings
 import com.margin.app.data.prefs.AiSettingsRepository
@@ -37,9 +40,15 @@ class SettingsViewModel(
     private val seedService: SeedService,
     private val dataExporter: DataExporter,
     private val alarmScheduler: AlarmScheduler,
+    private val connectionTester: AiConnectionTester = AiConnectionTester(),
 ) : ViewModel() {
 
     private val message = MutableStateFlow<String?>(null)
+
+    private val testing = MutableStateFlow(false)
+
+    /** True while a real request to the assistant provider is in flight. */
+    val connectionTesting: StateFlow<Boolean> = testing
 
     private val exportFile = MutableStateFlow<File?>(null)
 
@@ -82,8 +91,49 @@ class SettingsViewModel(
     }
 
     fun clearAiKey() = viewModelScope.launch {
-        aiSettingsRepository.update { it.copy(apiKey = "", enabled = false) }
-        message.value = "The API key was removed from this device."
+        val label = aiSettingsRepository.current().provider.label
+        aiSettingsRepository.update {
+            it.copy(
+                apiKey = "",
+                enabled = false,
+                connection = AiConnectionState.DISCONNECTED,
+                connectionMessage = "$label disconnected",
+                checkedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    /** Saves the key and proves it works with a real request before calling it connected. */
+    fun saveKey(raw: String) = viewModelScope.launch {
+        val key = raw.trim()
+        if (key.isEmpty()) {
+            message.value = "Enter an API key first."
+            return@launch
+        }
+        aiSettingsRepository.update { it.copy(apiKey = key, enabled = true) }
+        runConnectionTest()
+    }
+
+    fun testConnection() = viewModelScope.launch { runConnectionTest() }
+
+    private suspend fun runConnectionTest() {
+        if (testing.value) return
+        testing.value = true
+        try {
+            val settings = aiSettingsRepository.current()
+            val result = runCatching { connectionTester.test(settings) }
+                .getOrElse { ConnectionResult(false, "${settings.provider.label} connection failed: the test could not run.") }
+            aiSettingsRepository.update {
+                it.copy(
+                    model = result.model ?: it.model,
+                    connection = if (result.connected) AiConnectionState.CONNECTED else AiConnectionState.FAILED,
+                    connectionMessage = result.message,
+                    checkedAt = System.currentTimeMillis(),
+                )
+            }
+        } finally {
+            testing.value = false
+        }
     }
 
     fun restoreSeededTimetable() = viewModelScope.launch {

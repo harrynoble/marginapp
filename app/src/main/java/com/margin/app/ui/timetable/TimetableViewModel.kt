@@ -8,13 +8,16 @@ import com.margin.app.ai.ImageEncoder
 import com.margin.app.ai.TimetableImport
 import com.margin.app.ai.VisionImporter
 import com.margin.app.data.prefs.PreferencesRepository
+import com.margin.app.data.prefs.TimetableReferenceRepository
 import com.margin.app.data.repository.TimetableRepository
 import com.margin.app.di.AppContainer
 import com.margin.app.domain.model.ExceptionType
 import com.margin.app.domain.model.Routine
 import com.margin.app.domain.model.Subject
+import com.margin.app.domain.model.TimetableCheck
 import com.margin.app.domain.model.TimetableEntry
 import com.margin.app.domain.model.TimetableException
+import com.margin.app.domain.model.TimetableValidator
 import com.margin.app.domain.usecase.PlanningService
 import com.margin.app.domain.usecase.SeedService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +46,8 @@ data class TimetableUiState(
     val use24Hour: Boolean = false,
     val loading: Boolean = true,
     val import: TimetableImportState = TimetableImportState(),
+    /** The stored week checked against the confirmed one; null until something is confirmed. */
+    val check: TimetableCheck? = null,
 ) {
     val entriesForSelected: List<TimetableEntry>
         get() = entriesByDay[selectedDay].orEmpty().sortedBy { it.start }
@@ -51,12 +56,20 @@ data class TimetableUiState(
         entriesByDay[day].orEmpty().filter { it.kind.isTeaching }.sumOf { it.range.duration }
 }
 
+private data class Side(
+    val prefs: com.margin.app.data.prefs.UserPreferences,
+    val day: DayOfWeek,
+    val import: TimetableImportState,
+    val reference: List<TimetableEntry>?,
+)
+
 class TimetableViewModel(
     private val timetableRepository: TimetableRepository,
     private val preferencesRepository: PreferencesRepository,
     private val planningService: PlanningService,
     private val seedService: SeedService,
     private val visionImporter: VisionImporter,
+    private val referenceRepository: TimetableReferenceRepository,
 ) : ViewModel() {
 
     private val selectedDay = MutableStateFlow(LocalDate.now().dayOfWeek)
@@ -67,19 +80,20 @@ class TimetableViewModel(
         timetableRepository.observeSubjects(),
         timetableRepository.observeRoutines(),
         timetableRepository.observeExceptionsFrom(LocalDate.now()),
-        combine(preferencesRepository.preferences, selectedDay, importState) { prefs, day, import ->
-            Triple(prefs, day, import)
+        combine(preferencesRepository.preferences, selectedDay, importState, referenceRepository.reference) { prefs, day, import, reference ->
+            Side(prefs, day, import, reference)
         },
-    ) { entries, subjects, routines, exceptions, (prefs, day, import) ->
+    ) { entries, subjects, routines, exceptions, side ->
         TimetableUiState(
-            selectedDay = day,
+            selectedDay = side.day,
             entriesByDay = entries.groupBy { it.dayOfWeek },
             subjects = subjects,
             routines = routines.sortedBy { it.start },
             upcomingExceptions = exceptions.sortedBy { it.date },
-            use24Hour = prefs.use24HourTime,
+            use24Hour = side.prefs.use24HourTime,
             loading = false,
-            import = import,
+            import = side.import,
+            check = side.reference?.let { TimetableValidator.validate(it, entries) },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TimetableUiState())
 
@@ -87,13 +101,16 @@ class TimetableViewModel(
         selectedDay.value = day
     }
 
+    /** An edit made here is the user's own decision, so it becomes the confirmed timetable. */
     fun saveEntry(entry: TimetableEntry) = viewModelScope.launch {
         timetableRepository.upsertEntry(entry)
+        confirmStored()
         planningService.replan(LocalDate.now())
     }
 
     fun deleteEntry(entry: TimetableEntry) = viewModelScope.launch {
         timetableRepository.deleteEntry(entry)
+        confirmStored()
         planningService.replan(LocalDate.now())
     }
 
@@ -152,6 +169,23 @@ class TimetableViewModel(
         planningService.replan(LocalDate.now())
     }
 
+    // ---- the timetable check ---------------------------------------------------------------------
+
+    /** Puts the confirmed timetable back, undoing whatever changed without the user. */
+    fun restoreConfirmed() = viewModelScope.launch {
+        val confirmed = referenceRepository.get() ?: return@launch
+        timetableRepository.replaceAll(confirmed)
+        planningService.replan(LocalDate.now())
+        planningService.replan(LocalDate.now().plusDays(1))
+    }
+
+    /** The user has looked at the differences and the stored week is right. */
+    fun acceptStored() = viewModelScope.launch { confirmStored() }
+
+    private suspend fun confirmStored() {
+        referenceRepository.set(timetableRepository.weeklyEntries(), TimetableReferenceRepository.SOURCE_EDIT)
+    }
+
     // ---- import ---------------------------------------------------------------------------------
 
     /** Reads a timetable from a photo or PDF and holds it for review. */
@@ -169,14 +203,25 @@ class TimetableViewModel(
         }
     }
 
-    fun removeFromReview(entry: TimetableEntry) {
+    fun removeFromReview(index: Int) = editReview { entries -> entries.filterIndexed { i, _ -> i != index } }
+
+    fun replaceInReview(index: Int, entry: TimetableEntry) =
+        editReview { entries -> entries.mapIndexed { i, old -> if (i == index) entry.copy(id = 0) else old } }
+
+    fun addToReview(entry: TimetableEntry) = editReview { entries -> entries + entry.copy(id = 0) }
+
+    private fun editReview(change: (List<TimetableEntry>) -> List<TimetableEntry>) {
         importState.update { current ->
             val review = current.review ?: return@update current
-            current.copy(review = review.copy(entries = review.entries - entry))
+            val entries = change(review.entries).sortedWith(compareBy({ it.dayOfWeek.value }, { it.start }))
+            current.copy(review = review.copy(entries = entries))
         }
     }
 
-    /** Replaces the weekly timetable with the reviewed import. Subjects are added, never removed. */
+    /**
+     * Replaces the weekly timetable with the reviewed import, which becomes the confirmed
+     * timetable. Subjects are added, never removed.
+     */
     fun confirmImport() = viewModelScope.launch {
         val review = importState.value.review ?: return@launch
         importState.value = TimetableImportState()
@@ -187,6 +232,7 @@ class TimetableViewModel(
             .filter { it.code in used && it.code !in existing }
             .forEach { timetableRepository.upsertSubject(it) }
         timetableRepository.replaceAll(review.entries)
+        referenceRepository.set(review.entries, TimetableReferenceRepository.SOURCE_IMPORT)
         planningService.replan(LocalDate.now())
         planningService.replan(LocalDate.now().plusDays(1))
     }
@@ -202,6 +248,7 @@ class TimetableViewModel(
             planningService = container.planningService,
             seedService = container.seedService,
             visionImporter = container.visionImporter,
+            referenceRepository = container.timetableReferenceRepository,
         )
     }
 }

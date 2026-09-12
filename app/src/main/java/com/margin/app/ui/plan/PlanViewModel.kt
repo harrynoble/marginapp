@@ -6,6 +6,8 @@ import com.margin.app.core.MarginTime
 import com.margin.app.data.prefs.PreferencesRepository
 import com.margin.app.data.repository.ScheduleRepository
 import com.margin.app.data.repository.TaskRepository
+import com.margin.app.data.repository.TimetableRepository
+import com.margin.app.domain.model.ExceptionType
 import com.margin.app.di.AppContainer
 import com.margin.app.domain.model.BlockStateMachine
 import com.margin.app.domain.model.BlockType
@@ -42,7 +44,17 @@ data class PlanUiState(
     val nowMinute: Int = MarginTime.nowMinute(),
     val showStructural: Boolean = false,
     val loading: Boolean = true,
+    /** Dates this week the user has marked as holidays. */
+    val holidays: Set<LocalDate> = emptySet(),
+    /** Weekdays that normally have college. */
+    val collegeDays: Set<java.time.DayOfWeek> = emptySet(),
 ) {
+    val selectedIsHoliday: Boolean get() = selectedDate in holidays
+
+    /** A college day that can be taken off: it has classes and is today or later. */
+    val selectedCanBeHoliday: Boolean
+        get() = selectedDate.dayOfWeek in collegeDays && !selectedDate.isBefore(LocalDate.now())
+
     /**
      * Skipped, missed or moved blocks stay in the record, but where the day was rebuilt over
      * them they would stack on top of what is really happening, so only the live one is drawn.
@@ -64,6 +76,7 @@ class PlanViewModel(
     private val scheduleRepository: ScheduleRepository,
     private val preferencesRepository: PreferencesRepository,
     private val taskRepository: TaskRepository,
+    private val timetableRepository: TimetableRepository,
     private val planningService: PlanningService,
     private val actions: ScheduleActions,
 ) : ViewModel() {
@@ -85,7 +98,9 @@ class PlanViewModel(
             combine(
                 scheduleRepository.observeDay(date),
                 scheduleRepository.observeRange(weekStart, weekStart.plusDays(6)),
-            ) { dayBlocks, weekBlocks ->
+                timetableRepository.observeExceptionsFrom(weekStart),
+                timetableRepository.observeEntries(),
+            ) { dayBlocks, weekBlocks, exceptions, entries ->
                 PlanUiState(
                     selectedDate = date,
                     weekStart = weekStart,
@@ -107,6 +122,11 @@ class PlanViewModel(
                     nowMinute = MarginTime.nowMinute(),
                     showStructural = structural,
                     loading = false,
+                    holidays = exceptions
+                        .filter { it.type == ExceptionType.HOLIDAY && it.entryId == null }
+                        .map { it.date }
+                        .toSet(),
+                    collegeDays = entries.filter { it.active && it.kind.isTeaching }.map { it.dayOfWeek }.toSet(),
                 )
             }
         }
@@ -154,6 +174,19 @@ class PlanViewModel(
         actions.reschedule(blockId, block.date.plusDays(1), block.start)
     }
 
+    /** Takes the selected date off college. The weekly timetable itself is not touched. */
+    fun markHoliday(date: LocalDate) = viewModelScope.launch {
+        if (!planningService.isHoliday(date)) timetableRepository.markHoliday(date, "Marked as holiday")
+        planningService.replan(date)
+    }
+
+    fun clearHoliday(date: LocalDate) = viewModelScope.launch {
+        timetableRepository.exceptionsOn(date)
+            .filter { it.type == ExceptionType.HOLIDAY && it.entryId == null }
+            .forEach { timetableRepository.removeException(it.id) }
+        planningService.replan(date)
+    }
+
     fun togglePin(blockId: Long, locked: Boolean) = viewModelScope.launch {
         actions.setLocked(blockId, locked)
         planningService.replan(selectedDate.value)
@@ -185,6 +218,7 @@ class PlanViewModel(
             scheduleRepository = container.scheduleRepository,
             preferencesRepository = container.preferencesRepository,
             taskRepository = container.taskRepository,
+            timetableRepository = container.timetableRepository,
             planningService = container.planningService,
             actions = container.scheduleActions,
         )

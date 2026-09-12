@@ -217,11 +217,11 @@ class OpenAiCompatibleProvider(private val settings: AiSettings) : AiProvider {
         timeout: Int,
         message: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
     ): AiOutcome {
-        val body = buildJsonObject {
-            put("model", settings.model.ifBlank { AiProviderId.OPENAI.defaultModel })
-            put("max_tokens", maxTokens)
-            put("temperature", 0)
-            putJsonArray("messages") {
+        val body = OpenAiRequest.chatBody(
+            model = settings.model.ifBlank { AiProviderId.OPENAI.defaultModel },
+            maxTokens = maxTokens,
+            official = OpenAiRequest.isOfficial(settings.baseUrl),
+            messages = kotlinx.serialization.json.buildJsonArray {
                 add(
                     buildJsonObject {
                         put("role", "system")
@@ -229,8 +229,8 @@ class OpenAiCompatibleProvider(private val settings: AiSettings) : AiProvider {
                     },
                 )
                 add(buildJsonObject(message))
-            }
-        }
+            },
+        )
         val result = postJson(
             url = settings.baseUrl.trimEnd('/') + "/v1/chat/completions",
             headers = mapOf("Authorization" to "Bearer " + settings.apiKey),
@@ -262,8 +262,11 @@ class OpenAiCompatibleProvider(private val settings: AiSettings) : AiProvider {
 private fun Throwable.toFailure(): AiOutcome.Failure = when (this) {
     is HttpError -> AiOutcome.Failure(
         message = when (code) {
-            401, 403 -> "The assistant key was rejected. Check it in Settings."
-            429 -> "The assistant is rate limited. Try again shortly."
+            401 -> "The assistant key was rejected. Test the connection in Settings."
+            403 -> "The assistant key isn't allowed to make this request."
+            429 -> "The assistant is rate limited or out of credit. Try again shortly."
+            404 -> "The assistant model isn't available. Test the connection in Settings."
+            400 -> "The assistant rejected the request. Test the connection in Settings."
             in 500..599 -> "The assistant service is having trouble."
             else -> "The assistant request failed ($code)."
         },

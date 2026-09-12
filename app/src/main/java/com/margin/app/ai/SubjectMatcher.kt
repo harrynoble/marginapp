@@ -20,8 +20,18 @@ object SubjectMatcher {
         // "ds" for Data Structures and Algorithms: initials of the words that are not filler.
         subjects.firstOrNull { initials(it.name).startsWith(query) && query.length >= 2 }?.let { return it }
 
-        val aliases = mapOf("math" to "mathematics", "maths" to "mathematics", "econ" to "economics")
+        val aliases = mapOf(
+            "math" to "mathematics",
+            "maths" to "mathematics",
+            "econ" to "economics",
+            "eco" to "economics",
+            "economy" to "economics",
+        )
         val expanded = aliases[query] ?: query
+        // A short name typed in part: "eco" for "Econ", "struct" is too loose and is not tried.
+        if (query.length >= 3) {
+            subjects.firstOrNull { normalise(it.shortName).startsWith(query) }?.let { return it }
+        }
         subjects.firstOrNull { normalise(it.name).contains(expanded) }?.let { return it }
 
         val words = expanded.split(' ').filter { it.length >= 3 }

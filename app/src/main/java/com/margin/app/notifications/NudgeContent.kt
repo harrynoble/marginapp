@@ -5,6 +5,7 @@ import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.BlockStatus
 import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.ScheduleBlock
+import com.margin.app.domain.planner.DayType
 import com.margin.app.domain.planner.Nudge
 import com.margin.app.domain.planner.NudgeType
 import com.margin.app.notifications.NotificationActionReceiver as A
@@ -36,6 +37,32 @@ object NudgeContent {
             Notifier.Action(label, Notifier.openIntent(context, target))
 
         return when (nudge.type) {
+            NudgeType.DAY_PLAN -> {
+                block ?: return null
+                if (block.status != BlockStatus.PLANNED) return null
+                val sessions = blocks.count { it.isAcademic && it.status == BlockStatus.PLANNED }
+                val extras = listOfNotNull(
+                    "build".takeIf { blocks.any { it.type == BlockType.BUILD && it.status == BlockStatus.PLANNED } },
+                    "learning".takeIf { blocks.any { it.type == BlockType.LEARN && it.status == BlockStatus.PLANNED } },
+                    "leisure".takeIf { blocks.any { it.type == BlockType.LEISURE && it.status == BlockStatus.PLANNED } },
+                )
+                Content(
+                    title = when (nudge.dayType) {
+                        DayType.HOLIDAY -> "Your holiday plan is ready"
+                        DayType.WEEKEND -> "Weekend review is ready"
+                        DayType.EXAM_PERIOD -> "Today's exam-focused plan is ready"
+                        else -> "Today's plan is ready"
+                    },
+                    body = "First up: ${block.title} · ${MarginTime.formatDuration(block.duration)} at " +
+                        MarginTime.formatTime(block.start, use24Hour) +
+                        (if (sessions > 1) "\n$sessions study sessions" + (if (extras.isNotEmpty()) ", with ${extras.joinToString(", ")}" else "") else ""),
+                    actions = listOf(
+                        act("Start", A.ACTION_START, block.id),
+                        Notifier.Action("Open plan", Notifier.openIntent(context, null)),
+                    ),
+                )
+            }
+
             NudgeType.STUDY_START -> {
                 block ?: return null
                 Content(

@@ -31,6 +31,11 @@ launch is a working plan rather than an empty dashboard.
   the day is simply too full.
 - **Handles exams.** Add an exam timetable and revision builds up as exams approach, across
   every subject, without switching to a different app.
+- **Plans weekends and holidays differently.** Saturday and Sunday are a weekly review of
+  every subject, weighted by how the week went, with more build, learning and rest. Mark any
+  college day as a holiday and that date alone is planned the same way; the timetable stays.
+- **Checks the timetable.** The stored week is compared with the one you confirmed, and any
+  class that went missing or changed is listed for review instead of silently planned around.
 - **Never loses missed work.** "Are you out?" after a grace period; when you're back, the day
   is replanned and what no longer fits moves to tomorrow, capped so tomorrow stays realistic.
 - **Learns how you work.** How long things really take you, when you tend to skip, and when
@@ -39,6 +44,21 @@ launch is a working plan rather than an empty dashboard.
   are answered from those reasons.
 - **Works offline.** Everything except free-form language and image import runs on the
   device. Your data can be exported or deleted from Settings.
+
+## Screenshots
+
+A Monday on the test emulator, from the morning to the end of the day.
+
+| | | |
+| --- | --- | --- |
+| ![Launch](docs/screenshots/01-splash.png) | ![Welcome](docs/screenshots/03-welcome.png) | ![Morning](docs/screenshots/04-today-morning.png) |
+| Launch | First run | Today, morning |
+| ![Timeline](docs/screenshots/05-today-timeline.png) | ![Plan](docs/screenshots/06-plan.png) | ![Study now](docs/screenshots/07-study-now.png) |
+| The rest of the day | Plan | A study session is due |
+| ![Focus](docs/screenshots/08-focus.png) | ![Planned time up](docs/screenshots/09-focus-planned-time-up.png) | ![Evening](docs/screenshots/10-today-evening-done.png) |
+| Focus | Planned time is up | Evening, everything done |
+| ![Review](docs/screenshots/11-day-review.png) | ![Balance](docs/screenshots/12-insights-balance.png) | ![Subjects](docs/screenshots/13-insights-subjects.png) |
+| End-of-day review | Day balance | Every subject, theory and lab |
 
 ## The rule the AI plays by
 
@@ -120,11 +140,12 @@ Or copy the APK to the phone and open it, allowing installation from that source
 No key is compiled into the app and none is required. To enable free-form natural language:
 
 1. Open **Settings → Assistant**.
-2. Choose a provider (Anthropic, or any OpenAI-compatible endpoint).
-3. Paste your own API key and set the model.
+2. Choose a provider (OpenAI or Anthropic).
+3. Paste your own API key and tap **Save and Test**. The app makes a real request and shows
+   "OpenAI connected successfully" only if it works; otherwise it says why.
 
-The key is stored in a DataStore file separate from the rest of the settings and excluded
-from cloud backup. Requests contain only the current time, your free windows, the titles and
+The key is encrypted with an Android Keystore key and stored in a DataStore file separate
+from the rest of the settings, excluded from cloud backup. Requests contain only the current time, your free windows, the titles and
 times of today's blocks, and your open work — never notes, history or the database. Turning
 off **Share the shape of my day** narrows that to the clock and free time alone. Common
 sentences ("I'm out until 9", "make today lighter", "DS exam on Nov 12") are understood on

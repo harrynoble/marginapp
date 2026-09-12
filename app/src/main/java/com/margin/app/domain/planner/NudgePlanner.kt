@@ -13,6 +13,8 @@ import com.margin.app.domain.model.ScheduleBlock
 enum class NudgeType(val rank: Int) {
     TRANSITION(0),
     BREAK_SUGGESTION(1),
+    /** Weekends, holidays and exam days: the plan for the day is ready, and what is first. */
+    DAY_PLAN(2),
     STUDY_START(2),
     MISSED_CHECK(3),
     BREAK_OVER(4),
@@ -33,6 +35,8 @@ data class Nudge(
     val nextBlockId: Long? = null,
     val suggestedMinutes: Int? = null,
     val runMinutes: Int? = null,
+    /** For [NudgeType.DAY_PLAN]: which kind of day the plan is for. */
+    val dayType: DayType? = null,
 )
 
 data class NudgeSettings(
@@ -53,6 +57,7 @@ data class NudgeSettings(
     val sleepMinute: Int = 23 * 60,
     val breakThreshold: Int = 85,
     val lowEnergy: Boolean = false,
+    val dayType: DayType = DayType.WEEKDAY,
 )
 
 data class NudgeState(
@@ -99,6 +104,24 @@ object NudgePlanner {
                 expiresAt = studyOpener.start + settings.missedGraceMinutes - 1,
                 key = "study-start",
                 blockId = studyOpener.id,
+            )
+        }
+
+        // ---- the day's plan, on a weekend, a holiday or an exam day -----------------------
+        // There is no college to anchor the day, so the morning starts with what the plan is.
+        // Nothing about classes is ever said: on a holiday there are none.
+        val firstWork = plannedWork.firstOrNull { !it.optional }
+        if (settings.studyStart && settings.dayType != DayType.WEEKDAY && firstWork != null) {
+            val at = (firstWork.start - DAY_PLAN_LEAD)
+                .coerceAtLeast(settings.wakeMinute + DAY_PLAN_AFTER_WAKE)
+                .coerceAtMost(firstWork.start - lead)
+            out += Nudge(
+                type = NudgeType.DAY_PLAN,
+                atMinute = at,
+                expiresAt = firstWork.start + settings.missedGraceMinutes - 1,
+                key = "day-plan",
+                blockId = firstWork.id,
+                dayType = settings.dayType,
             )
         }
 
@@ -235,4 +258,6 @@ object NudgePlanner {
         nudges.filter { it.atMinute > nowMinute + DUE_TOLERANCE }.minWithOrNull(compareBy({ it.atMinute }, { it.type.rank }))
 
     private const val DUE_TOLERANCE = 1
+    private const val DAY_PLAN_LEAD = 60
+    private const val DAY_PLAN_AFTER_WAKE = 15
 }

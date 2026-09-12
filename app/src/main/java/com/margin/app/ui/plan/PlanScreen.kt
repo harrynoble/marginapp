@@ -130,17 +130,55 @@ fun PlanScreen(
                 onShift = viewModel::shiftWeek,
             )
         }
-        item(key = "summary") {
-            Text(
-                text = listOf(
-                    MarginTime.formatDuration(summary?.classMinutes ?: 0) + " college",
-                    MarginTime.formatDuration(summary?.workMinutes ?: 0) + " of work",
-                    MarginTime.formatDuration(summary?.freeMinutes ?: 0) + " free",
-                ).joinToString("  ·  "),
-                style = AppleType.footnote,
-                color = MarginTheme.colors.secondaryLabel,
-                modifier = Modifier.padding(horizontal = Space.gutter + 4.dp, vertical = Space.s),
-            )
+        // Until the day has loaded, show no totals rather than claim it is empty.
+        if (!state.loading) item(key = "summary") {
+            var confirmHoliday by remember { mutableStateOf(false) }
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier.padding(start = Space.gutter + 4.dp, end = Space.gutter, top = Space.xs, bottom = Space.xs),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = (if (state.selectedIsHoliday) listOf("Holiday") else emptyList<String>()).plus(
+                        listOf(
+                            MarginTime.formatDuration(summary?.classMinutes ?: 0) + " college",
+                            MarginTime.formatDuration(summary?.workMinutes ?: 0) + " of work",
+                            MarginTime.formatDuration(summary?.freeMinutes ?: 0) + " free",
+                        ),
+                    ).joinToString("  ·  "),
+                    style = AppleType.footnote,
+                    color = MarginTheme.colors.secondaryLabel,
+                    modifier = Modifier.weight(1f),
+                )
+                when {
+                    state.selectedIsHoliday ->
+                        com.margin.app.ui.components.TextAction(text = "Undo Holiday", onClick = { viewModel.clearHoliday(date) })
+                    state.selectedCanBeHoliday ->
+                        com.margin.app.ui.components.TextAction(text = "Mark as Holiday", onClick = { confirmHoliday = true })
+                }
+            }
+            if (confirmHoliday) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { confirmHoliday = false },
+                    title = { Text("Mark this day as a holiday?", style = AppleType.headline) },
+                    text = {
+                        Text(
+                            "Your normal timetable will not be treated as an active college day on this date. " +
+                                "I'll use the extra time for academic review, building, learning, and leisure.",
+                            style = AppleType.subheadline,
+                            color = MarginTheme.colors.secondaryLabel,
+                        )
+                    },
+                    confirmButton = {
+                        com.margin.app.ui.components.TextAction(text = "Confirm", emphasized = true, onClick = {
+                            confirmHoliday = false
+                            viewModel.markHoliday(date)
+                        })
+                    },
+                    dismissButton = { com.margin.app.ui.components.TextAction(text = "Cancel", onClick = { confirmHoliday = false }) },
+                    containerColor = MarginTheme.colors.surface,
+                    shape = com.margin.app.ui.theme.MarginShape.card,
+                )
+            }
         }
         item(key = "grid") {
             DayGrid(

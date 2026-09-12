@@ -107,7 +107,13 @@ screen underneath; tabs cross-fade. The focus ring counts down to the second.
   with the moment: ready (Start), running (Finish, Pause), paused (Resume), late to start
   (Start now, I'm out, Later, Skip today) and past its planned end (Move to next, Continue).
   Nothing is shown until the day has loaded, and after bedtime the screen stops asking for
-  decisions: it says the day is over and that anything missed carries to tomorrow.
+  decisions: it says the day is over and that anything missed carries to tomorrow. The date
+  line names the kind of day ("Saturday, 19 September · Weekend review"); a college day has a
+  "Mark as holiday" chip, which asks first, and a holiday shows a Holiday card with Undo.
+- **Timetable** — a single status row first: "Timetable verified", or "N timetable entries
+  need review" with the exact differences and a choice to restore or keep.
+- **Assistant settings** — the provider, a plain Connected / Not connected / Not tested
+  status, Save and Test, Test Connection, and the last result in words.
 - **Sheets** — Lighten (what must happen, priorities, drop build or learning), Out (later
   today, tonight, tomorrow, a chosen time), and the build and learning offers, where "Not
   today" sits where Cancel would.

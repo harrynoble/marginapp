@@ -16,6 +16,8 @@ import com.margin.app.domain.model.BlockType
 import com.margin.app.domain.model.BreakReason
 import com.margin.app.domain.model.DayState
 import com.margin.app.domain.model.Decision
+import com.margin.app.domain.model.ExceptionType
+import com.margin.app.domain.planner.DayType
 import com.margin.app.domain.model.Exam
 import com.margin.app.domain.model.LearningGoal
 import com.margin.app.domain.model.Project
@@ -77,6 +79,11 @@ data class TodayUiState(
     val goals: List<LearningGoal> = emptyList(),
     val lightenOptions: List<LightenOption> = emptyList(),
     val subjects: List<Subject> = emptyList(),
+    /** The user marked today as a holiday: the weekly timetable is set aside for this date only. */
+    val holiday: Boolean = false,
+    val dayType: DayType = DayType.WEEKDAY,
+    /** Classes were planned today, so there is a college day that could be marked as a holiday. */
+    val collegeToday: Boolean = false,
 ) {
     val progress: Float
         get() = if (plannedWorkMinutes <= 0) 0f
@@ -161,7 +168,10 @@ class TodayViewModel(
                 taskRepository.observeProjects(),
                 goalRepository.observeGoals(),
                 timetableRepository.observeSubjects(),
-            ) { exams, projects, goals, subjects -> Extras(exams, projects, goals, subjects) }
+                timetableRepository.observeExceptionsFrom(day).map { exceptions ->
+                    exceptions.any { it.date == day && it.type == ExceptionType.HOLIDAY && it.entryId == null }
+                },
+            ) { exams, projects, goals, subjects, holiday -> Extras(exams, projects, goals, subjects, holiday) }
             combine(today, context, clock) { snapshot, extras, now ->
                 val nowMinute = if (day == now.toLocalDate()) MarginTime.nowMinute(now) else 0
                 buildState(day, nowMinute, snapshot, extras)
@@ -186,6 +196,7 @@ class TodayViewModel(
         val projects: List<Project>,
         val goals: List<LearningGoal>,
         val subjects: List<Subject>,
+        val holiday: Boolean,
     )
 
     init {
@@ -305,7 +316,30 @@ class TodayViewModel(
             goals = extras.goals.filter { it.active },
             lightenOptions = lightenOptions,
             subjects = extras.subjects,
+            holiday = extras.holiday,
+            dayType = DayType.of(date, extras.holiday, ExamPlanner.pressure(date, extras.exams).active),
+            collegeToday = visible.any { it.type == BlockType.CLASS },
         )
+    }
+
+    // ---- holidays --------------------------------------------------------------------------------
+
+    /**
+     * Takes today off college. Only this date changes: the weekly timetable is untouched, and
+     * the day is replanned with the extra time for review, building, learning and rest.
+     */
+    fun markHoliday() = launchAction {
+        val today = LocalDate.now()
+        if (!planningService.isHoliday(today)) timetableRepository.markHoliday(today, "Marked as holiday")
+        planningService.replan(today)
+    }
+
+    fun unmarkHoliday() = launchAction {
+        val today = LocalDate.now()
+        timetableRepository.exceptionsOn(today)
+            .filter { it.type == ExceptionType.HOLIDAY && it.entryId == null }
+            .forEach { timetableRepository.removeException(it.id) }
+        planningService.replan(today)
     }
 
     // ---- sessions ------------------------------------------------------------------------------

@@ -79,9 +79,36 @@ insights, notifications and the end-of-day review.
    and its work placed again, without the user opening anything.
 5. **Review**: the evening check-in records workload and energy.
 
+## Timetable integrity
+
+The timetable is the foundation, so it is checked rather than trusted.
+
+- `TimetableSourceTest` compares the shipped timetable with a transcription of the source
+  image, cell by cell: every day, time, subject and theory/lab/tutorial type.
+- The **confirmed timetable** (`TimetableReferenceRepository`) is what the user last
+  verified: the shipped week, a reviewed import, or the week after their own edits.
+  `TimetableValidator` compares the stored week with it and names every missing, extra,
+  duplicated, moved, retyped or swapped class. The Timetable screen shows
+  "Timetable verified" or "N timetable entries need review", with restore or accept.
+- Imports are lossless: printed suffixes are types ("EE(T)" is an Economics tutorial), a
+  subject is matched only on an exact code, short name or full name, and anything unfamiliar
+  is flagged in the review screen instead of being merged with a lookalike. Every row can be
+  edited, removed or added before the import replaces the week.
+
+## The assistant connection
+
+A key is never reported as working because it was typed. `AiConnectionTester` makes two
+real authenticated requests (a model lookup, then a one-word completion made exactly as the
+app makes them) and only then shows "OpenAI connected successfully". Failures say why:
+invalid key, no credit, rate limit, unavailable model (a working one is chosen instead), or
+no network. Requests use `max_completion_tokens` and no fixed temperature for reasoning
+models, which newer OpenAI models require. The key is encrypted with an Android Keystore key
+before it is stored, and never logged, exported or committed. Nothing else depends on it.
+
 ## Notifications
 
-`NudgePlanner` (pure) derives the day's nudges from the plan: study start, transitions, break
+`NudgePlanner` (pure) derives the day's nudges from the plan: on weekends, holidays and exam
+days a morning "plan is ready" with the first session; study start, transitions, break
 suggestions, the "are you out?" check after a grace period, break over, up next, build and
 learning offers, and the daily review. `AlarmScheduler` arms one exact alarm for the next
 one; a 15-minute `NudgeWorker` catches anything missed. A `nudge_log` ledger guarantees a

@@ -15,6 +15,8 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BeachAccess
 import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
@@ -87,6 +89,9 @@ fun TimetableScreen(
     var creating by remember { mutableStateOf(false) }
     var pickingDayOff by remember { mutableStateOf(false) }
     var editingSubject by remember { mutableStateOf<Subject?>(null) }
+    var showCheck by remember { mutableStateOf(false) }
+    var editingReviewIndex by remember { mutableStateOf<Int?>(null) }
+    var addingToReview by remember { mutableStateOf(false) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) viewModel.importFrom(context.applicationContext, uri)
@@ -119,6 +124,33 @@ fun TimetableScreen(
             )
         },
     ) {
+        state.check?.let { check ->
+            item(key = "check") {
+                GroupedSection(modifier = Modifier.padding(bottom = Space.s)) {
+                    GroupedRow(
+                        title = if (check.verified) {
+                            "Timetable verified"
+                        } else {
+                            "${check.issues.size} timetable " + (if (check.issues.size == 1) "entry needs" else "entries need") + " review"
+                        },
+                        subtitle = if (check.verified) {
+                            "Matches the timetable you confirmed · ${check.confirmedCount} entries"
+                        } else {
+                            "Tap to see exactly what changed"
+                        },
+                        leading = {
+                            IconTile(
+                                if (check.verified) Icons.Rounded.Verified else Icons.Rounded.ErrorOutline,
+                                if (check.verified) accents.green else accents.orange,
+                            )
+                        },
+                        showChevron = !check.verified,
+                        onClick = if (check.verified) null else ({ showCheck = true }),
+                    )
+                }
+            }
+        }
+
         item(key = "days") {
             SegmentedControl(
                 options = DayOfWeek.entries,
@@ -314,13 +346,66 @@ fun TimetableScreen(
     }
 
     state.import.review?.let { review ->
+        val pickable = (state.subjects + review.subjects).distinctBy { it.code }
         TimetableReviewSheet(
             review = review,
             use24Hour = state.use24Hour,
-            onRemove = viewModel::removeFromReview,
+            onEdit = { editingReviewIndex = it },
+            onRemove = { viewModel.removeFromReview(it) },
+            onAdd = { addingToReview = true },
             onDismiss = viewModel::cancelImport,
             onConfirm = viewModel::confirmImport,
         )
+        editingReviewIndex?.let { index ->
+            review.entries.getOrNull(index)?.let { entry ->
+                TimetableEntrySheet(
+                    entry = entry,
+                    day = entry.dayOfWeek,
+                    subjects = pickable,
+                    use24Hour = state.use24Hour,
+                    onDismiss = { editingReviewIndex = null },
+                    onSave = {
+                        viewModel.replaceInReview(index, it)
+                        editingReviewIndex = null
+                    },
+                    onDelete = {
+                        viewModel.removeFromReview(index)
+                        editingReviewIndex = null
+                    },
+                )
+            }
+        }
+        if (addingToReview) {
+            TimetableEntrySheet(
+                entry = null,
+                day = state.selectedDay,
+                subjects = pickable,
+                use24Hour = state.use24Hour,
+                onDismiss = { addingToReview = false },
+                onSave = {
+                    viewModel.addToReview(it)
+                    addingToReview = false
+                },
+                onDelete = null,
+            )
+        }
+    }
+
+    if (showCheck) {
+        state.check?.let { check ->
+            TimetableCheckSheet(
+                check = check,
+                onDismiss = { showCheck = false },
+                onRestore = {
+                    viewModel.restoreConfirmed()
+                    showCheck = false
+                },
+                onAccept = {
+                    viewModel.acceptStored()
+                    showCheck = false
+                },
+            )
+        }
     }
 
     if (pickingDayOff) {

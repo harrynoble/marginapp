@@ -29,6 +29,7 @@ import com.margin.app.core.MarginTime
 import com.margin.app.domain.model.AcademicType
 import com.margin.app.domain.model.Difficulty
 import com.margin.app.domain.model.Subject
+import com.margin.app.domain.model.TimetableCheck
 import com.margin.app.domain.model.TimetableEntry
 import com.margin.app.domain.model.TimetableKind
 import com.margin.app.ui.components.GroupedRow
@@ -114,18 +115,23 @@ fun SubjectSheet(
 }
 
 /**
- * What the import read, laid out by day. Theory and lab are shown separately so a misread
- * kind is obvious. The user removes anything wrong before it replaces their week.
+ * What the import read, laid out by day. Theory, lab and tutorial are shown for every class so
+ * a misread type is obvious, and anything the app is unsure of is flagged: a subject it has
+ * never seen, or two classes that overlap. Tap a class to fix its subject, time, day or type;
+ * add one the import missed. Only what is confirmed here replaces the week.
  */
 @Composable
 fun TimetableReviewSheet(
     review: TimetableImport,
     use24Hour: Boolean,
-    onRemove: (TimetableEntry) -> Unit,
+    onEdit: (Int) -> Unit,
+    onRemove: (Int) -> Unit,
+    onAdd: () -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     val colors = MarginTheme.colors
+    val flagged = review.entries.indices.count { flagFor(review, it) != null }
     MarginSheet(
         onDismiss = onDismiss,
         title = "Check the Timetable",
@@ -134,8 +140,9 @@ fun TimetableReviewSheet(
         onTrailing = onConfirm,
     ) {
         Text(
-            text = "${review.entries.size} classes read. Remove anything that is wrong; you can edit the rest afterwards. " +
-                "This replaces your current weekly timetable.",
+            text = "${review.entries.size} classes read" +
+                (if (flagged > 0) ", $flagged to check" else "") +
+                ". Tap a class to fix its subject, time, day or type. This replaces your current weekly timetable.",
             style = AppleType.subheadline,
             color = colors.secondaryLabel,
             modifier = Modifier.padding(horizontal = Space.gutter + Space.l, vertical = Space.s),
@@ -148,13 +155,15 @@ fun TimetableReviewSheet(
                 }
             }
         }
-        review.entries.groupBy { it.dayOfWeek }.toSortedMap().forEach { (day, entries) ->
+        review.entries.withIndex().groupBy { it.value.dayOfWeek }.toSortedMap().forEach { (day, indexed) ->
             GroupedSection(header = day.getDisplayName(TextStyle.FULL, Locale.getDefault())) {
-                entries.sortedBy { it.start }.forEachIndexed { index, entry ->
-                    if (index > 0) RowSeparator()
+                indexed.sortedBy { it.value.start }.forEachIndexed { row, (position, entry) ->
+                    if (row > 0) RowSeparator()
+                    val flag = flagFor(review, position)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clickable { onEdit(position) }
                             .heightIn(min = 52.dp)
                             .padding(start = Space.l, end = Space.s, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -177,6 +186,9 @@ fun TimetableReviewSheet(
                                 color = colors.secondaryLabel,
                                 maxLines = 1,
                             )
+                            if (flag != null) {
+                                Text(text = flag, style = AppleType.footnote, color = colors.warning, maxLines = 2)
+                            }
                         }
                         Spacer(Modifier.width(Space.s))
                         Icon(
@@ -186,12 +198,71 @@ fun TimetableReviewSheet(
                             modifier = Modifier
                                 .size(36.dp)
                                 .clip(MarginShape.capsule)
-                                .clickable { onRemove(entry) }
+                                .clickable { onRemove(position) }
                                 .padding(8.dp),
                         )
                     }
                 }
             }
         }
+        GroupedSection(modifier = Modifier.padding(top = Space.l)) {
+            GroupedRow(title = "Add a Missing Class", titleColor = colors.tint, onClick = onAdd)
+        }
+    }
+}
+
+/**
+ * What changed in the stored week compared with the confirmed one. The user either puts the
+ * confirmed week back or says the stored one is right; nothing is changed without them.
+ */
+@Composable
+fun TimetableCheckSheet(
+    check: TimetableCheck,
+    onDismiss: () -> Unit,
+    onRestore: () -> Unit,
+    onAccept: () -> Unit,
+) {
+    val colors = MarginTheme.colors
+    MarginSheet(onDismiss = onDismiss, title = "Timetable Check", leadingText = "Close") {
+        Text(
+            text = "${check.issues.size} " + (if (check.issues.size == 1) "entry differs" else "entries differ") +
+                " from the timetable you confirmed (${check.confirmedCount} entries).",
+            style = AppleType.subheadline,
+            color = colors.secondaryLabel,
+            modifier = Modifier.padding(horizontal = Space.gutter + Space.l, vertical = Space.s),
+        )
+        GroupedSection(header = "What changed") {
+            check.issues.forEachIndexed { index, issue ->
+                if (index > 0) RowSeparator()
+                Text(
+                    text = issue.description,
+                    style = AppleType.body,
+                    color = colors.label,
+                    modifier = Modifier.padding(horizontal = Space.l, vertical = 12.dp),
+                )
+            }
+        }
+        GroupedSection(
+            modifier = Modifier.padding(top = Space.l),
+            footer = "Restoring puts back the timetable you confirmed. Keeping the current one makes it the new confirmed timetable.",
+        ) {
+            GroupedRow(title = "Restore Confirmed Timetable", titleColor = colors.tint, onClick = onRestore)
+            RowSeparator()
+            GroupedRow(title = "Keep Current as Correct", onClick = onAccept)
+        }
+    }
+}
+
+/** Why a row deserves a second look, or null if nothing about it is doubtful. */
+private fun flagFor(review: TimetableImport, index: Int): String? {
+    val entry = review.entries[index]
+    val overlap = review.entries.withIndex().firstOrNull { (other, candidate) ->
+        other != index && candidate.dayOfWeek == entry.dayOfWeek && candidate.range.overlaps(entry.range)
+    }?.value
+    return when {
+        overlap != null -> "Overlaps ${overlap.subjectCode ?: overlap.title} at " + "%02d:%02d".format(overlap.start / 60, overlap.start % 60)
+        entry.subjectCode != null && entry.subjectCode in review.newSubjectCodes ->
+            "New subject ${entry.subjectCode}. If it is one you already have, tap to pick it."
+        else -> null
     }
 }
